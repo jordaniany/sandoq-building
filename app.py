@@ -1061,27 +1061,27 @@ def render_apartments_page(db_engine: BuildingFundDB):
         with st.form("apartment_form"):
             col_a1, col_a2 = st.columns(2)
             with col_a1:
-                default_apt_no = str(selected_existing["apt_no"]) if selected_existing else ""
+                default_apt_no = str(selected_existing["apt_no"]) if selected_existing is not None else ""
                 apt_no_in = st.text_input("رقم الشقة (المعرف الفريد):", value=default_apt_no, placeholder="مثال: 101, 202, G1")
                 
-                default_res = str(selected_existing["resident_name"]) if selected_existing else ""
+                default_res = str(selected_existing["resident_name"]) if selected_existing is not None else ""
                 resident_name_in = st.text_input("اسم الساكن / رب الأسرة:", value=default_res, placeholder="مثال: أبو أحمد العبادي")
                 
-                default_floor = str(selected_existing["floor"]) if selected_existing else "الطابق الأول"
+                default_floor = str(selected_existing["floor"]) if selected_existing is not None else "الطابق الأول"
                 floor_in = st.text_input("الطابق:", value=default_floor)
 
             with col_a2:
-                default_rtype = str(selected_existing["resident_type"]) if selected_existing else "مالك"
+                default_rtype = str(selected_existing["resident_type"]) if selected_existing is not None else "مالك"
                 rtype_idx = 0 if default_rtype == "مالك" else 1
                 resident_type_in = st.selectbox("صفة الساكن:", ["مالك", "مستأجر"], index=rtype_idx)
                 
-                default_phone = str(selected_existing["phone"]) if selected_existing else "9627"
+                default_phone = str(selected_existing["phone"]) if selected_existing is not None else "9627"
                 phone_in = st.text_input("رقم الهاتف (بالصيغة الدولية):", value=default_phone, placeholder="962791234567")
                 
-                default_fee = float(selected_existing["monthly_fee"]) if selected_existing else 25.0
+                default_fee = float(selected_existing["monthly_fee"]) if selected_existing is not None else 25.0
                 monthly_fee_in = st.number_input("قيمة الاشتراك الشهري المقررة (د.أ):", value=default_fee, min_value=0.0, step=5.0)
 
-            notes_in = st.text_area("ملاحظات خاصة بالشقة:", value=str(selected_existing.get("notes", "")) if selected_existing else "")
+            notes_in = st.text_area("ملاحظات خاصة بالشقة:", value=str(selected_existing.get("notes", "")) if selected_existing is not None else "")
 
             c_sub1, c_sub2 = st.columns([2, 1])
             with c_sub1:
@@ -1105,7 +1105,7 @@ def render_apartments_page(db_engine: BuildingFundDB):
                 st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
 
         # Delete apartment option if editing existing
-        if selected_existing:
+        if selected_existing is not None:
             st.markdown("---")
             with st.expander("🗑️ حذف هذه الشقة من النظام"):
                 st.warning(f"هل أنت تأكد من رغبتك في حذف بيانات الشقة ({selected_existing['apt_no']})؟")
