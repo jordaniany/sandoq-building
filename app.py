@@ -53,7 +53,6 @@ def init_firestore():
             # 3. Try dict in Secrets [firebase]
             elif "firebase" in st.secrets:
                 cred_dict = dict(st.secrets["firebase"])
-                # Ensure newlines in private key are converted if unescaped
                 if "private_key" in cred_dict:
                     cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                 cred = credentials.Certificate(cred_dict)
@@ -345,6 +344,14 @@ class BuildingFundDB:
             st.session_state["local_payments"] = pays
             st.session_state["local_expenses"] = exps
 
+    def _show_api_disabled_warning(self):
+        st.warning("""
+            ⚠️ **تنبيه:** خدمة Cloud Firestore غير مفعلة بعد في مشروع Firebase الخاص بك (`sandoq-building-2026`).
+            يرجى تفعيلها بنقرة واحدة من لوحة التحكم:
+            👉 [اضغط هنا لتفعيل Firestore Database](https://console.firebase.google.com/project/sandoq-building-2026/firestore)
+            (اضغط على Create Database ثم اختر Test Mode).
+        """)
+
     # --- Apartments ---
     def get_apartments(self):
         if self.use_firestore:
@@ -359,7 +366,10 @@ class BuildingFundDB:
                     return st.session_state["local_apartments"]
                 return sorted(apts, key=lambda x: str(x.get("apt_no", "")))
             except Exception as e:
-                st.error(f"خطأ عند قراءة الشقق من Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    self._show_api_disabled_warning()
+                else:
+                    st.error(f"خطأ عند قراءة الشقق من Firestore: {e}")
                 return st.session_state["local_apartments"]
         else:
             return sorted(st.session_state["local_apartments"], key=lambda x: str(x.get("apt_no", "")))
@@ -371,9 +381,11 @@ class BuildingFundDB:
                 self.db.collection("apartments").document(apt_no).set(apt_data, merge=True)
                 st.success(f"تم حفظ بيانات الشقة ({apt_no}) بنجاح في Firestore! 🟢")
             except Exception as e:
-                st.error(f"فشل الحفظ في Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    self._show_api_disabled_warning()
+                else:
+                    st.error(f"فشل الحفظ في Firestore: {e}")
         
-        # Always update local state as well
         local_apts = st.session_state["local_apartments"]
         idx = next((i for i, a in enumerate(local_apts) if str(a["apt_no"]) == apt_no), None)
         if idx is not None:
@@ -392,7 +404,10 @@ class BuildingFundDB:
                     return st.session_state["local_payments"]
                 return sorted(pays, key=lambda x: str(x.get("payment_date", "")), reverse=True)
             except Exception as e:
-                st.error(f"خطأ عند قراءة المقبوضات من Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    pass
+                else:
+                    st.error(f"خطأ عند قراءة المقبوضات من Firestore: {e}")
                 return st.session_state["local_payments"]
         else:
             return sorted(st.session_state["local_payments"], key=lambda x: str(x.get("payment_date", "")), reverse=True)
@@ -403,7 +418,10 @@ class BuildingFundDB:
                 self.db.collection("payments").add(payment_data)
                 st.success("تم تسجيل سند القبض في Firestore بنجاح! 🟢")
             except Exception as e:
-                st.error(f"فشل الحفظ في Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    self._show_api_disabled_warning()
+                else:
+                    st.error(f"فشل الحفظ في Firestore: {e}")
         
         st.session_state["local_payments"].insert(0, payment_data)
 
@@ -417,7 +435,10 @@ class BuildingFundDB:
                     return st.session_state["local_expenses"]
                 return sorted(exps, key=lambda x: str(x.get("expense_date", "")), reverse=True)
             except Exception as e:
-                st.error(f"خطأ عند قراءة المصروفات من Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    pass
+                else:
+                    st.error(f"خطأ عند قراءة المصروفات من Firestore: {e}")
                 return st.session_state["local_expenses"]
         else:
             return sorted(st.session_state["local_expenses"], key=lambda x: str(x.get("expense_date", "")), reverse=True)
@@ -428,7 +449,10 @@ class BuildingFundDB:
                 self.db.collection("expenses").add(expense_data)
                 st.success("تم تسجيل سند الصرف في Firestore بنجاح! 🟢")
             except Exception as e:
-                st.error(f"فشل الحفظ في Firestore: {e}")
+                if "403" in str(e) or "disabled" in str(e):
+                    self._show_api_disabled_warning()
+                else:
+                    st.error(f"فشل الحفظ في Firestore: {e}")
 
         st.session_state["local_expenses"].insert(0, expense_data)
 
@@ -441,22 +465,20 @@ class BuildingFundDB:
         try:
             apts, pays, exps = get_default_seed_data()
             
-            # Seed Apartments
             for a in apts:
                 self.db.collection("apartments").document(str(a["apt_no"])).set(a, merge=True)
-            
-            # Seed Payments
             for p in pays:
                 self.db.collection("payments").add(p)
-                
-            # Seed Expenses
             for e in exps:
                 self.db.collection("expenses").add(e)
 
             st.balloons()
             st.success("تم رفع البيانات الأولية النموذجية إلى Cloud Firestore بنجاح! 🎉")
         except Exception as err:
-            st.error(f"حدث خطأ أثناء رفع البيانات: {err}")
+            if "403" in str(err) or "disabled" in str(err):
+                self._show_api_disabled_warning()
+            else:
+                st.error(f"حدث خطأ أثناء رفع البيانات: {err}")
 
 # ---------------------------------------------------------
 # Helper Functions (Formatting, WhatsApp URLs, Downloads)
@@ -626,7 +648,6 @@ def render_dashboard_page(db_engine: BuildingFundDB):
     # ---------------------------------------------------------
     st.markdown(f"### ⚠️ جدول المتابعة الفوري والمتأخرات لشهر ({get_arabic_month_name(selected_month)})")
     
-    # Determine paid apartments for selected_month
     paid_apts = set()
     if not df_pays.empty and "for_month" in df_pays.columns:
         paid_apts = set(df_pays[df_pays["for_month"] == selected_month]["apt_no"].astype(str).unique())
@@ -643,7 +664,6 @@ def render_dashboard_page(db_engine: BuildingFundDB):
         
         df_unpaid = pd.DataFrame(unpaid_list)
         
-        # Display custom table with action buttons
         for idx, row in df_unpaid.iterrows():
             apt_no = str(row.get("apt_no", ""))
             resident = str(row.get("resident_name", "جارنا العزيز"))
@@ -652,7 +672,6 @@ def render_dashboard_page(db_engine: BuildingFundDB):
             floor = str(row.get("floor", ""))
             rtype = str(row.get("resident_type", "مالك"))
 
-            # Courteous Jordanian Message Text
             msg_text = (
                 f"مرحباً جارنا العزيز {resident}، تحية طيبة من لجنة العمارة (إشراف المهندس أبو عادل). "
                 f"نود تذكيركم بلطف باشتراك خدمات العمارة لشهر {selected_month} بقيمة {fee:g} دينار. "
