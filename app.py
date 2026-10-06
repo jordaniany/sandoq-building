@@ -37,7 +37,6 @@ def init_firestore():
         return None, "مكتبة firebase-admin غير مثبتة في بيئة العمل."
 
     try:
-        # Check if already initialized
         if not firebase_admin._apps:
             key_filename = "serviceAccountKey.json"
             
@@ -45,9 +44,18 @@ def init_firestore():
             if os.path.exists(key_filename):
                 cred = credentials.Certificate(key_filename)
                 firebase_admin.initialize_app(cred)
-            # 2. Try Streamlit Secrets
+            # 2. Try firebase_json in Secrets (Raw JSON string)
+            elif "firebase_json" in st.secrets:
+                raw_json = st.secrets["firebase_json"]
+                cred_dict = json.loads(raw_json) if isinstance(raw_json, str) else dict(raw_json)
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+            # 3. Try dict in Secrets [firebase]
             elif "firebase" in st.secrets:
                 cred_dict = dict(st.secrets["firebase"])
+                # Ensure newlines in private key are converted if unescaped
+                if "private_key" in cred_dict:
+                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred)
             elif "gcp_service_account" in st.secrets:
@@ -1238,7 +1246,7 @@ def main():
             db_engine.seed_firestore_initial_data()
     else:
         st.sidebar.warning("الوضع التجريبي (Demo Mode) 🟡")
-        st.sidebar.caption("للاتصال بـ Firestore الحقيقي، يرجى إضافة ملف `serviceAccountKey.json` في مجلد المشروع الرئيسي.")
+        st.sidebar.caption("للاتصال بـ Firestore الحقيقي، يرجى إضافة مفاتيح الاعتماد في Streamlit Secrets.")
 
     # Render Active Page based on menu choice
     if menu_choice == "📊 لوحة المؤشرات والقيادة":
