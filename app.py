@@ -362,8 +362,6 @@ class BuildingFundDB:
                     d = doc.to_dict()
                     d["doc_id"] = doc.id
                     apts.append(d)
-                if not apts:
-                    return st.session_state["local_apartments"]
                 return sorted(apts, key=lambda x: str(x.get("apt_no", "")))
             except Exception as e:
                 if "403" in str(e) or "disabled" in str(e):
@@ -379,7 +377,7 @@ class BuildingFundDB:
         if self.use_firestore:
             try:
                 self.db.collection("apartments").document(apt_no).set(apt_data, merge=True)
-                st.success(f"تم حفظ بيانات الشقة ({apt_no}) بنجاح في Firestore! 🟢")
+                st.success(f"تم حفظ بيانات الشقة ({apt_no}) - {apt_data['resident_name']} بنجاح! 🟢")
             except Exception as e:
                 if "403" in str(e) or "disabled" in str(e):
                     self._show_api_disabled_warning()
@@ -394,14 +392,25 @@ class BuildingFundDB:
             local_apts.append(apt_data)
         st.session_state["local_apartments"] = local_apts
 
+    def delete_apartment(self, apt_no):
+        apt_no_str = str(apt_no).strip()
+        if self.use_firestore:
+            try:
+                self.db.collection("apartments").document(apt_no_str).delete()
+                st.success(f"تم حذف الشقة ({apt_no_str}) بنجاح من Firestore! 🗑️")
+            except Exception as e:
+                st.error(f"فشل الحذف من Firestore: {e}")
+
+        st.session_state["local_apartments"] = [
+            a for a in st.session_state["local_apartments"] if str(a["apt_no"]) != apt_no_str
+        ]
+
     # --- Payments ---
     def get_payments(self):
         if self.use_firestore:
             try:
                 docs = self.db.collection("payments").stream()
                 pays = [doc.to_dict() for doc in docs]
-                if not pays:
-                    return st.session_state["local_payments"]
                 return sorted(pays, key=lambda x: str(x.get("payment_date", "")), reverse=True)
             except Exception as e:
                 if "403" in str(e) or "disabled" in str(e):
@@ -431,8 +440,6 @@ class BuildingFundDB:
             try:
                 docs = self.db.collection("expenses").stream()
                 exps = [doc.to_dict() for doc in docs]
-                if not exps:
-                    return st.session_state["local_expenses"]
                 return sorted(exps, key=lambda x: str(x.get("expense_date", "")), reverse=True)
             except Exception as e:
                 if "403" in str(e) or "disabled" in str(e):
@@ -456,29 +463,35 @@ class BuildingFundDB:
 
         st.session_state["local_expenses"].insert(0, expense_data)
 
-    def seed_firestore_initial_data(self):
-        """Pushes sample Jordanian seed data directly to Firestore collections."""
-        if not self.use_firestore:
-            st.warning("الربط بـ Firestore غير مفعل حالياً.")
-            return
+    def clear_all_data(self, clear_apartments=False):
+        """Wipes payments, expenses, and optionally apartments from Firestore and local state."""
+        if self.use_firestore:
+            try:
+                # Delete all payments
+                pay_docs = self.db.collection("payments").stream()
+                for doc in pay_docs:
+                    doc.reference.delete()
 
-        try:
-            apts, pays, exps = get_default_seed_data()
-            
-            for a in apts:
-                self.db.collection("apartments").document(str(a["apt_no"])).set(a, merge=True)
-            for p in pays:
-                self.db.collection("payments").add(p)
-            for e in exps:
-                self.db.collection("expenses").add(e)
+                # Delete all expenses
+                exp_docs = self.db.collection("expenses").stream()
+                for doc in exp_docs:
+                    doc.reference.delete()
 
-            st.balloons()
-            st.success("تم رفع البيانات الأولية النموذجية إلى Cloud Firestore بنجاح! 🎉")
-        except Exception as err:
-            if "403" in str(err) or "disabled" in str(err):
-                self._show_api_disabled_warning()
-            else:
-                st.error(f"حدث خطأ أثناء رفع البيانات: {err}")
+                # Delete apartments if requested
+                if clear_apartments:
+                    apt_docs = self.db.collection("apartments").stream()
+                    for doc in apt_docs:
+                        doc.reference.delete()
+
+                st.success("تم تفريغ وتصفير بيانات قاعدة البيانات في Cloud Firestore بنجاح! 🧹")
+            except Exception as err:
+                st.error(f"حدث خطأ أثناء تفريغ البيانات من Firestore: {err}")
+
+        # Always clear local state
+        st.session_state["local_payments"] = []
+        st.session_state["local_expenses"] = []
+        if clear_apartments:
+            st.session_state["local_apartments"] = []
 
 # ---------------------------------------------------------
 # Helper Functions (Formatting, WhatsApp URLs, Downloads)
@@ -565,12 +578,10 @@ def render_dashboard_page(db_engine: BuildingFundDB):
     df_pays = pd.DataFrame(payments) if payments else pd.DataFrame()
     df_exps = pd.DataFrame(expenses) if expenses else pd.DataFrame()
 
-    # Calculations
     total_payments_all_time = df_pays["amount"].sum() if not df_pays.empty and "amount" in df_pays.columns else 0.0
     total_expenses_all_time = df_exps["amount"].sum() if not df_exps.empty and "amount" in df_exps.columns else 0.0
     current_fund_balance = total_payments_all_time - total_expenses_all_time
 
-    # Month Selection for current metrics
     current_ym = date.today().strftime("%Y-%m")
     
     available_months = sorted(list(set(
@@ -581,18 +592,15 @@ def render_dashboard_page(db_engine: BuildingFundDB):
     with col_filter1:
         selected_month = st.selectbox("📅 اختر شهر المتابعة والتحصيل:", available_months, index=0)
 
-    # Current Month Calculations
     if not df_pays.empty and "for_month" in df_pays.columns and "amount" in df_pays.columns:
         month_pays_df = df_pays[df_pays["for_month"] == selected_month]
         month_collections = month_pays_df["amount"].sum()
     else:
         month_collections = 0.0
 
-    # Total Expected Monthly Fee across active apartments
     expected_monthly_total = df_apts["monthly_fee"].sum() if not df_apts.empty and "monthly_fee" in df_apts.columns else 250.0
     collection_percentage = (month_collections / expected_monthly_total * 100) if expected_monthly_total > 0 else 0.0
 
-    # Month Expenses Calculation
     if not df_exps.empty and "expense_date" in df_exps.columns and "amount" in df_exps.columns:
         df_exps["ym"] = df_exps["expense_date"].astype(str).str.slice(0, 7)
         month_exps_df = df_exps[df_exps["ym"] == selected_month]
@@ -600,7 +608,6 @@ def render_dashboard_page(db_engine: BuildingFundDB):
     else:
         month_expenses = 0.0
 
-    # KPI Top Cards
     kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
 
     with kpi_col1:
@@ -643,9 +650,7 @@ def render_dashboard_page(db_engine: BuildingFundDB):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
-    # Defaulters & Immediate WhatsApp Reminder Table
-    # ---------------------------------------------------------
+    # Defaulters Table
     st.markdown(f"### ⚠️ جدول المتابعة الفوري والمتأخرات لشهر ({get_arabic_month_name(selected_month)})")
     
     paid_apts = set()
@@ -701,9 +706,7 @@ def render_dashboard_page(db_engine: BuildingFundDB):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
-    # Plotly Financial Flow Chart (Last 6 Months)
-    # ---------------------------------------------------------
+    # Plotly Financial Flow Chart
     st.markdown("### 📉 التغير والتدفق المالي (المقبوضات مقابل المصروفات)")
     
     months_data = []
@@ -975,13 +978,17 @@ def render_expense_page(db_engine: BuildingFundDB):
 # ---------------------------------------------------------
 def render_apartments_page(db_engine: BuildingFundDB):
     st.markdown("## 🏢 دليل الشقق والسكان وإدارة الاشتراكات")
-    st.markdown("إدارة بيانات الشقق، أسماء الساكنين، تغيير الصفة (مالك/مستأجر)، وتحديث أرقام التواصل.")
+    st.markdown("إدارة بيانات الشقق، أسماء الساكنين، إضافة سكان جدد، وتغيير البيانات بنقرة واحدة.")
     st.markdown("---")
 
-    tab_view, tab_manage = st.tabs(["📋 دليل الشقق الحالي", "➕ إضافة / تعديل شقة"])
+    tab_view, tab_manage = st.tabs(["📋 دليل الشقق الحالي", "➕ إضافة / تعديل بيانات شقة"])
 
     apartments = db_engine.get_apartments()
     df_apts = pd.DataFrame(apartments) if apartments else pd.DataFrame()
+
+    # Pre-selection logic for quick inline edit button
+    if "editing_apt_no" not in st.session_state:
+        st.session_state["editing_apt_no"] = None
 
     with tab_view:
         if not df_apts.empty:
@@ -1004,9 +1011,8 @@ def render_apartments_page(db_engine: BuildingFundDB):
                 phone = str(apt.get("phone", ""))
                 fee = float(apt.get("monthly_fee", 25.0))
                 floor = str(apt.get("floor", ""))
-                notes = str(apt.get("notes", ""))
 
-                c1, c2, c3, c4, c5 = st.columns([1.2, 2.5, 1.5, 1.5, 2])
+                c1, c2, c3, c4, c5, c6 = st.columns([1.2, 2.2, 1.3, 1.5, 1.8, 1.5])
                 with c1:
                     st.markdown(f"**🏢 شقة {apt_no}**<br><small style='color:#64748b;'>{floor}</small>", unsafe_allow_html=True)
                 with c2:
@@ -1023,19 +1029,33 @@ def render_apartments_page(db_engine: BuildingFundDB):
                             📱 تواصل واتساب
                         </a>
                     """, unsafe_allow_html=True)
+                with c6:
+                    if st.button(f"✏️ تعديل", key=f"btn_edit_{apt_no}"):
+                        st.session_state["editing_apt_no"] = apt_no
+                        st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
+
                 st.markdown("<hr style='margin:6px 0; border-color:#e2e8f0;'>", unsafe_allow_html=True)
         else:
-            st.info("لا توجد شقق مسجلة بعد.")
+            st.info("لا توجد شقق مسجلة بعد. يمكنك إضافة شقق وسكان جدد من التبويب المالي الجانبي.")
 
     with tab_manage:
-        st.markdown("#### ✏️ إضافة شقة جديدة أو تعديل شقة قائمة")
+        st.markdown("#### ✏️ إضافة شقة جديدة أو تعديل بيانات ساكن حالي")
         
-        edit_mode = st.radio("نوع العملية:", ["إضافة شقة جديدة", "تعديل بيانات شقة حالية"], horizontal=True)
+        edit_mode = st.radio("نوع العملية:", ["إضافة شقة / ساكن جديد", "تعديل بيانات شقة حالية"], horizontal=True)
 
         selected_existing = None
         if edit_mode == "تعديل بيانات شقة حالية" and not df_apts.empty:
             apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r for _, r in df_apts.iterrows()}
-            selected_key = st.selectbox("اختر الشقة المراد تعديل بياناتها:", list(apt_map.keys()))
+            
+            # Auto-select if clicked edit from list
+            default_index = 0
+            if st.session_state.get("editing_apt_no"):
+                target_no = st.session_state["editing_apt_no"]
+                matching_keys = [k for k in apt_map.keys() if f"شقة {target_no} " in k]
+                if matching_keys:
+                    default_index = list(apt_map.keys()).index(matching_keys[0])
+
+            selected_key = st.selectbox("اختر الشقة المراد تعديل بياناتها:", list(apt_map.keys()), index=default_index)
             selected_existing = apt_map[selected_key]
 
         with st.form("apartment_form"):
@@ -1063,7 +1083,9 @@ def render_apartments_page(db_engine: BuildingFundDB):
 
             notes_in = st.text_area("ملاحظات خاصة بالشقة:", value=str(selected_existing.get("notes", "")) if selected_existing else "")
 
-            submit_apt = st.form_submit_button("💾 حفظ بيانات الشقة")
+            c_sub1, c_sub2 = st.columns([2, 1])
+            with c_sub1:
+                submit_apt = st.form_submit_button("💾 حفظ وتحديث بيانات الشقة")
 
         if submit_apt:
             if not apt_no_in.strip() or not resident_name_in.strip():
@@ -1079,14 +1101,25 @@ def render_apartments_page(db_engine: BuildingFundDB):
                     "notes": notes_in.strip()
                 }
                 db_engine.save_apartment(apt_record)
+                st.session_state["editing_apt_no"] = None
                 st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
+
+        # Delete apartment option if editing existing
+        if selected_existing:
+            st.markdown("---")
+            with st.expander("🗑️ حذف هذه الشقة من النظام"):
+                st.warning(f"هل أنت تأكد من رغبتك في حذف بيانات الشقة ({selected_existing['apt_no']})؟")
+                if st.button("نعم، احذف الشقة نهائياً"):
+                    db_engine.delete_apartment(selected_existing['apt_no'])
+                    st.session_state["editing_apt_no"] = None
+                    st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
 
 # ---------------------------------------------------------
 # PAGE 5: Financial Reports, Exports & Transparency (الكشوفات والتقارير)
 # ---------------------------------------------------------
 def render_reports_page(db_engine: BuildingFundDB):
     st.markdown("## 📈 كشوفات الحساب والتقارير والشفافية")
-    st.markdown("ميزان المراجعة، تصدير التقارير المالية لإكسل، وتوليد تقرير الواتساب الشهري بضغطة زر.")
+    st.markdown("ميزان المراجعة، تصدير التقارير المالية لإكسل، وإعادة تهيئة السجلات وتصفير الصندوق.")
     st.markdown("---")
 
     payments = db_engine.get_payments()
@@ -1210,7 +1243,34 @@ def render_reports_page(db_engine: BuildingFundDB):
         f"مع خالص التحية، لجنة العمارة - المهندس أبو عادل 🌸"
     )
 
-    st.text_area("انسخ النص أدناه وانشره مباشرة في مجموعات الواتساب:", value=wa_group_report, height=280)
+    st.text_area("انسخ النص أدناه وانشره مباشرة في مجموعات الواتساب:", value=wa_group_report, height=250)
+
+    st.markdown("<br><hr>", unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # RESET / WIPE DATABASE SECTION (تفريغ وتصفير البيانات)
+    # ---------------------------------------------------------
+    st.markdown("### 🧹 أدوات إدارة الصندوق وإعادة التهيئة")
+    with st.expander("⚠️ تصفير وتفريغ بيانات الصندوق للبدء بسجلات جديدة"):
+        st.warning("⚠️ **تحذير:** عملية التصفير تقوم بتفريغ كافة المقبوضات والمصروفات المسجلة للبدء بسجل جديد خالٍ من البيانات الافتراضية.")
+        
+        reset_option = st.radio(
+            "اختر مستوى التصفير المطلوب:",
+            [
+                "تفريغ المقبوضات والمصروفات فقط (مع الإبقاء على قائمة الشقق والسكان)",
+                "تفريغ شامل وجذري (تصفير المقبوضات والمصروفات + حذف جميع الشقق للسماح بإدخالها من جديد)"
+            ]
+        )
+
+        confirm_reset = st.checkbox("أنا متأكد من رغبتي في تصفير وتفريغ قاعدة البيانات")
+
+        if st.button("🚨 تنفيذ تصفير وتفريغ قاعدة البيانات الآن"):
+            if confirm_reset:
+                wipe_apts = ("تفريغ شامل" in reset_option)
+                db_engine.clear_all_data(clear_apartments=wipe_apts)
+                st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
+            else:
+                st.error("يرجى وضع علامة صح على مربع التأكيد قبل الضغط على زر التصفير.")
 
 # ---------------------------------------------------------
 # MAIN APP ENTRY POINT & SIDEBAR NAVIGATION
@@ -1261,8 +1321,6 @@ def main():
     st.sidebar.markdown("##### 🔌 حالة قاعدة البيانات:")
     if db_engine.use_firestore:
         st.sidebar.success("متصل مباشر بـ Cloud Firestore 🟢")
-        if st.sidebar.button("رفع البيانات النموذجية الأولية لـ Firestore"):
-            db_engine.seed_firestore_initial_data()
     else:
         st.sidebar.warning("الوضع التجريبي (Demo Mode) 🟡")
         st.sidebar.caption("للاتصال بـ Firestore الحقيقي، يرجى إضافة مفاتيح الاعتماد في Streamlit Secrets.")
