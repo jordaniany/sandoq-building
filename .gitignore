@@ -1,0 +1,14 @@
+# Sensitive credentials
+serviceAccountKey.json
+*.pem
+.env
+.streamlit/secrets.toml
+
+# Python cache & venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
