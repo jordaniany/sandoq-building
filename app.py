@@ -44,25 +44,34 @@ def init_firestore():
             if os.path.exists(key_filename):
                 cred = credentials.Certificate(key_filename)
                 firebase_admin.initialize_app(cred)
-            # 2. Try firebase_json in Secrets (Raw JSON string)
-            elif "firebase_json" in st.secrets:
-                raw_json = st.secrets["firebase_json"]
-                cred_dict = json.loads(raw_json) if isinstance(raw_json, str) else dict(raw_json)
-                cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred)
-            # 3. Try dict in Secrets [firebase]
-            elif "firebase" in st.secrets:
-                cred_dict = dict(st.secrets["firebase"])
-                if "private_key" in cred_dict:
-                    cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
-                cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred)
-            elif "gcp_service_account" in st.secrets:
-                cred_dict = dict(st.secrets["gcp_service_account"])
-                cred = credentials.Certificate(cred_dict)
-                firebase_admin.initialize_app(cred)
             else:
-                return None, "لم يتم العثور على ملف الاعتماد serviceAccountKey.json أو مفاتيح Secrets."
+                secrets_found = False
+                try:
+                    # 2. Try firebase_json in Secrets (Raw JSON string)
+                    if "firebase_json" in st.secrets:
+                        raw_json = st.secrets["firebase_json"]
+                        cred_dict = json.loads(raw_json) if isinstance(raw_json, str) else dict(raw_json)
+                        cred = credentials.Certificate(cred_dict)
+                        firebase_admin.initialize_app(cred)
+                        secrets_found = True
+                    # 3. Try dict in Secrets [firebase]
+                    elif "firebase" in st.secrets:
+                        cred_dict = dict(st.secrets["firebase"])
+                        if "private_key" in cred_dict:
+                            cred_dict["private_key"] = cred_dict["private_key"].replace("\\n", "\n")
+                        cred = credentials.Certificate(cred_dict)
+                        firebase_admin.initialize_app(cred)
+                        secrets_found = True
+                    elif "gcp_service_account" in st.secrets:
+                        cred_dict = dict(st.secrets["gcp_service_account"])
+                        cred = credentials.Certificate(cred_dict)
+                        firebase_admin.initialize_app(cred)
+                        secrets_found = True
+                except Exception:
+                    pass
+
+                if not secrets_found:
+                    return None, "لم يتم العثور على ملف الاعتماد serviceAccountKey.json أو مفاتيح Secrets."
         
         db = firestore.client()
         return db, "تم الاتصال بـ Firebase Cloud Firestore بنجاح! 🟢"
@@ -527,8 +536,11 @@ def create_excel_download(df: pd.DataFrame, filename: str) -> bytes:
 # ---------------------------------------------------------
 def get_master_password():
     """Retrieves master password from secrets or environment or default."""
-    if "APP_PASSWORD" in st.secrets:
-        return str(st.secrets["APP_PASSWORD"])
+    try:
+        if "APP_PASSWORD" in st.secrets:
+            return str(st.secrets["APP_PASSWORD"])
+    except Exception:
+        pass
     return os.getenv("APP_PASSWORD", "abuadel2026")
 
 def render_login_screen():
