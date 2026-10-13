@@ -1117,160 +1117,697 @@ def render_apartments_page(db_engine: BuildingFundDB):
 # ---------------------------------------------------------
 # PAGE 5: Financial Reports, Exports & Transparency (الكشوفات والتقارير)
 # ---------------------------------------------------------
+# ---------------------------------------------------------
+# PAGE 5: Financial Reports, Exports & Transparency (الكشوفات والتقارير)
+# ---------------------------------------------------------
 def render_reports_page(db_engine: BuildingFundDB):
-    st.markdown("## 📈 كشوفات الحساب والتقارير والشفافية")
-    st.markdown("ميزان المراجعة، تصدير التقارير المالية لإكسل، وإعادة تهيئة السجلات وتصفير الصندوق.")
+    st.markdown("## 📈 مركز الكشوفات والتقارير المالية والشفافية")
+    st.markdown("كشوفات تفصيلية للمقبوضات، المصروفات، كشف حساب ساكن محدد، ميزان المراجعة، وحصر الذمم والمتأخرات.")
     st.markdown("---")
 
+    apartments = db_engine.get_apartments()
     payments = db_engine.get_payments()
     expenses = db_engine.get_expenses()
 
+    df_apts = pd.DataFrame(apartments) if apartments else pd.DataFrame()
     df_pays = pd.DataFrame(payments) if payments else pd.DataFrame()
     df_exps = pd.DataFrame(expenses) if expenses else pd.DataFrame()
 
-    available_months = ["جميع الفترات (كشف كامل)"]
-    if not df_pays.empty and "for_month" in df_pays.columns:
-        available_months += sorted(list(df_pays["for_month"].unique()), reverse=True)
+    # Pre-process columns
+    if not df_pays.empty and "amount" in df_pays.columns:
+        df_pays["amount"] = pd.to_numeric(df_pays["amount"], errors="coerce").fillna(0.0)
+    if not df_exps.empty and "amount" in df_exps.columns:
+        df_exps["amount"] = pd.to_numeric(df_exps["amount"], errors="coerce").fillna(0.0)
+    if not df_apts.empty and "monthly_fee" in df_apts.columns:
+        df_apts["monthly_fee"] = pd.to_numeric(df_apts["monthly_fee"], errors="coerce").fillna(25.0)
 
-    filter_period = st.selectbox("📅 اختر فترة التقرير وكشف الحساب:", available_months)
-
-    if filter_period != "جميع الفترات (كشف كامل)":
-        filtered_pays = df_pays[df_pays["for_month"] == filter_period] if not df_pays.empty else pd.DataFrame()
-        filtered_exps = df_exps[df_exps["expense_date"].astype(str).str.slice(0, 7) == filter_period] if not df_exps.empty else pd.DataFrame()
-    else:
-        filtered_pays = df_pays
-        filtered_exps = df_exps
-
-    total_in = filtered_pays["amount"].sum() if not filtered_pays.empty and "amount" in filtered_pays.columns else 0.0
-    total_out = filtered_exps["amount"].sum() if not filtered_exps.empty and "amount" in filtered_exps.columns else 0.0
-    net_balance = total_in - total_out
-
-    c_sum1, c_sum2, c_sum3 = st.columns(3)
-    with c_sum1:
-        st.markdown(f"""
-            <div class="kpi-card success">
-                <div class="kpi-title">📥 إجمالي المقبوضات ({filter_period})</div>
-                <div class="kpi-value">{total_in:,.2f} د.أ</div>
+    # Top Information Banner to clearly outline all requested financial statements
+    st.markdown("""
+        <div style="background:#f8fafc; border:1px solid #cbd5e1; border-right:5px solid #2563eb; padding:12px 18px; border-radius:10px; margin-bottom:18px;">
+            <div style="font-weight:700; color:#1e293b; font-size:1.05rem; margin-bottom:4px;">
+                📑 خيارات كشوفات الحساب والتقارير المالية المتاحة:
             </div>
-        """, unsafe_allow_html=True)
-    with c_sum2:
-        st.markdown(f"""
-            <div class="kpi-card danger">
-                <div class="kpi-title">📤 إجمالي المصروفات ({filter_period})</div>
-                <div class="kpi-value">{total_out:,.2f} د.أ</div>
+            <div style="color:#475569; font-size:0.9rem; line-height:1.8;">
+                • <b>كشف المدفوعات (المقبوضات):</b> رصد المقبوضات حسب الفترة، طريقة الدفع، أو الشقة مع تحليل بياني وتصدير إكسل.<br>
+                • <b>كشف المصروفات (النفقات والصيانة):</b> تفريغ كامل لجميع مصاريف العمارة حسب البند والفترة والفواتير وتصدير إكسل.<br>
+                • <b>مدفوعات من شخص معين:</b> كشف حساب تفصيلي لشقة أو ساكن محدد (المدفوع والمتأخر وسندات القبض وإرسال واتساب).<br>
+                • <b>خيارات كشوفات أخرى:</b> ميزان المراجعة والتدفق المالي، كشف ذمم الشقق، ومولّد تقرير واتساب الشهري العام.
             </div>
-        """, unsafe_allow_html=True)
-    with c_sum3:
-        n_cls = "info" if net_balance >= 0 else "warning"
-        st.markdown(f"""
-            <div class="kpi-card {n_cls}">
-                <div class="kpi-title">⚖️ صافي الفارق / المتبقي</div>
-                <div class="kpi-value">{net_balance:,.2f} د.أ</div>
-            </div>
-        """, unsafe_allow_html=True)
+        </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    # 6 Specialized Reporting Tabs
+    tab_payments, tab_expenses, tab_resident, tab_balance, tab_aging, tab_other = st.tabs([
+        "📥 كشف المدفوعات (المقبوضات)",
+        "📤 كشف المصروفات (النفقات والصيانة)",
+        "👤 مدفوعات من شخص معين (كشف حساب ساكن)",
+        "⚖️ ميزان المراجعة والتدفق المالي",
+        "⚠️ كشف الذمم والمتأخرات",
+        "📱 كشوفات وتقارير أخرى"
+    ])
+    # ---------------------------------------------------------
+    # TAB 2: كشف المقبوضات التفصيلي (مدفوعات)
+    # ---------------------------------------------------------
+    with tab_payments:
+        st.markdown("### 📥 كشف المقبوضات والتحصيلات الشامل")
+        st.caption("فلترة مقبوضات الصندوق حسب الفترة، طريقة الدفع، أو رقم الشقة مع إمكانية التصدير والتحليل.")
 
-    st.markdown("### 📥 تصدير كشوفات البيانات إلى Excel / CSV")
-    col_exp1, col_exp2 = st.columns(2)
+        if df_pays.empty:
+            st.info("لا توجد مقبوضات مسجلة في الصندوق حتى الآن.")
+        else:
+            col_pf1, col_pf2, col_pf3, col_pf4 = st.columns(4)
+            with col_pf1:
+                pay_months_opts = ["جميع الأشهر"] + sorted(list(set(df_pays["for_month"].dropna().astype(str).tolist())), reverse=True)
+                sel_pay_month = st.selectbox("📅 فلترة بالشهر المستحق:", pay_months_opts, key="pay_filter_month")
+            with col_pf2:
+                pay_methods_opts = ["جميع طرق الدفع"] + sorted(list(set(df_pays["payment_method"].dropna().astype(str).tolist()))) if "payment_method" in df_pays.columns else ["جميع طرق الدفع"]
+                sel_pay_method = st.selectbox("💳 فلترة بطريقة الدفع:", pay_methods_opts, key="pay_filter_method")
+            with col_pf3:
+                apt_filter_opts = ["جميع الشقق"] + sorted(list(set(df_pays["apt_no"].dropna().astype(str).tolist()))) if "apt_no" in df_pays.columns else ["جميع الشقق"]
+                sel_pay_apt = st.selectbox("🏢 فلترة برقم الشقة:", apt_filter_opts, key="pay_filter_apt")
+            with col_pf4:
+                search_pay_kw = st.text_input("🔍 بحث نصي (اسم / إيصال):", key="pay_filter_search")
 
-    with col_exp1:
-        if not filtered_pays.empty:
-            excel_pays = create_excel_download(filtered_pays, "payments.xlsx")
-            csv_pays = filtered_pays.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            # Apply filters
+            filtered_p = df_pays.copy()
+            if sel_pay_month != "جميع الأشهر" and "for_month" in filtered_p.columns:
+                filtered_p = filtered_p[filtered_p["for_month"].astype(str) == sel_pay_month]
+            if sel_pay_method != "جميع طرق الدفع" and "payment_method" in filtered_p.columns:
+                filtered_p = filtered_p[filtered_p["payment_method"].astype(str) == sel_pay_method]
+            if sel_pay_apt != "جميع الشقق" and "apt_no" in filtered_p.columns:
+                filtered_p = filtered_p[filtered_p["apt_no"].astype(str) == sel_pay_apt]
+            if search_pay_kw:
+                mask_p = (
+                    filtered_p["resident_name"].astype(str).str.contains(search_pay_kw, case=False, na=False) |
+                    filtered_p["receipt_no"].astype(str).str.contains(search_pay_kw, case=False, na=False) |
+                    filtered_p["notes"].astype(str).str.contains(search_pay_kw, case=False, na=False)
+                )
+                filtered_p = filtered_p[mask_p]
 
-            st.download_button(
-                label="📊 تحميل كشف المقبوضات (Excel)",
-                data=excel_pays,
-                file_name=f"مقبوضات_صندوق_العمارة_{filter_period}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.download_button(
-                label="📄 تحميل كشف المقبوضات (CSV)",
-                data=csv_pays,
-                file_name=f"مقبوضات_صندوق_العمارة_{filter_period}.csv",
-                mime="text/csv"
-            )
+            tot_filt_p = filtered_p["amount"].sum() if not filtered_p.empty else 0.0
+            count_filt_p = len(filtered_p)
+            avg_filt_p = (tot_filt_p / count_filt_p) if count_filt_p > 0 else 0.0
 
-    with col_exp2:
-        if not filtered_exps.empty:
-            excel_exps = create_excel_download(filtered_exps, "expenses.xlsx")
-            csv_exps = filtered_exps.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            # Summary Cards
+            pk1, pk2, pk3 = st.columns(3)
+            with pk1:
+                st.markdown(f"""
+                    <div class="kpi-card success">
+                        <div class="kpi-title">📥 إجمالي المقبوضات المعروضة</div>
+                        <div class="kpi-value">{tot_filt_p:,.2f} د.أ</div>
+                        <div class="kpi-sub">{count_filt_p} حركة استلام</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with pk2:
+                st.markdown(f"""
+                    <div class="kpi-card info">
+                        <div class="kpi-title">📊 متوسط قيمة الدفعة</div>
+                        <div class="kpi-value">{avg_filt_p:,.2f} د.أ</div>
+                        <div class="kpi-sub">معدل التحصيل لكل سند</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with pk3:
+                st.markdown(f"""
+                    <div class="kpi-card warning">
+                        <div class="kpi-title">🧾 عدد السندات المصدرة</div>
+                        <div class="kpi-value">{count_filt_p}</div>
+                        <div class="kpi-sub">إيصال قبض مسجل</div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-            st.download_button(
-                label="📊 تحميل كشف المصروفات (Excel)",
-                data=excel_exps,
-                file_name=f"مصروفات_صندوق_العمارة_{filter_period}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.download_button(
-                label="📄 تحميل كشف المصروفات (CSV)",
-                data=csv_exps,
-                file_name=f"مصروفات_صندوق_العمارة_{filter_period}.csv",
-                mime="text/csv"
-            )
+            st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+            # Table display
+            cols_p_show = ["payment_date", "receipt_no", "apt_no", "resident_name", "for_month", "amount", "payment_method", "notes"]
+            p_exist = [c for c in cols_p_show if c in filtered_p.columns]
+            df_disp_p = filtered_p[p_exist].copy().rename(columns={
+                "payment_date": "تاريخ الاستلام",
+                "receipt_no": "رقم السند",
+                "apt_no": "الشقة",
+                "resident_name": "اسم الساكن",
+                "for_month": "عن شهر",
+                "amount": "المبلغ (د.أ)",
+                "payment_method": "طريقة الدفع",
+                "notes": "الملاحظات"
+            })
+            st.dataframe(df_disp_p, use_container_width=True, hide_index=True)
 
-    st.markdown("### 📱 مولّد التقرير الشهري الجاهز للنشر في جروب واتساب العمارة")
-    st.markdown("ينشئ نصاً منسقاً واحترافياً يوضح الرصيد الافتتاحي، المقبوضات، تفاصيل المصاريف، والرصيد المتبقي بلمسة واحدة.")
+            # Payment Breakdown by Method Chart
+            if not filtered_p.empty and "payment_method" in filtered_p.columns:
+                c_p_chart, c_p_dl = st.columns([2, 1])
+                with c_p_chart:
+                    fig_pm = px.pie(
+                        filtered_p,
+                        names="payment_method",
+                        values="amount",
+                        title="توزيع المقبوضات حسب طريقة الدفع",
+                        color_discrete_sequence=["#10b981", "#3b82f6", "#f59e0b"]
+                    )
+                    fig_pm.update_layout(font=dict(family="Tajawal, sans-serif"))
+                    st.plotly_chart(fig_pm, use_container_width=True)
 
-    report_month = filter_period if filter_period != "جميع الفترات (كشف كامل)" else date.today().strftime("%Y-%m")
-
-    exp_details_str = ""
-    if not filtered_exps.empty and "category" in filtered_exps.columns:
-        for idx, row in filtered_exps.iterrows():
-            cat = row.get("category", "مصروف")
-            amt = float(row.get("amount", 0.0))
-            desc = row.get("description", "")
-            exp_details_str += f"▫️ {cat}: {amt:g} د.أ ({desc})\n"
-    else:
-        exp_details_str = "▫️ لا توجد مصروفات مسجلة خلال هذا الشهر.\n"
-
-    wa_group_report = (
-        f"🏛️ *التقرير المالي الشهري لصندوق العمارة السكنية*\n"
-        f"🗓️ *عن شهر:* {get_arabic_month_name(report_month)}\n"
-        f"إشراف: المهندس أبو عادل\n"
-        f"---------------------------------\n"
-        f"💰 *الملخص المالي:* \n"
-        f"▪️ إجمالي التحصيلات والمقبوضات: {total_in:,.2f} دينار\n"
-        f"▪️ إجمالي المصروفات والصيانة: {total_out:,.2f} دينار\n"
-        f"---------------------------------\n"
-        f"🔹 *الرصيد الصافي المتبقي بالصندوق:* {net_balance:,.2f} دينار\n\n"
-        f"📋 *تفاصيل البنود والمصروفات:* \n"
-        f"{exp_details_str}\n"
-        f"أتقدم بجزيل الشكر لكافة الجيران الأفاضل الملتزمين بالسداد في الموعد المحدد لضمان جودة الخدمات واستمرار الصيانة.\n"
-        f"مع خالص التحية، لجنة العمارة - المهندس أبو عادل 🌸"
-    )
-
-    st.text_area("انسخ النص أدناه وانشره مباشرة في مجموعات الواتساب:", value=wa_group_report, height=250)
-
-    st.markdown("<br><hr>", unsafe_allow_html=True)
+                with c_p_dl:
+                    st.markdown("##### 📥 تصدير كشف المقبوضات:")
+                    excel_all_p = create_excel_download(df_disp_p, "كشف_المقبوضات.xlsx")
+                    st.download_button(
+                        label="📊 تحميل كشف المقبوضات (Excel)",
+                        data=excel_all_p,
+                        file_name="كشف_المقبوضات_المفلتر.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_all_p_excel"
+                    )
+                    csv_all_p = df_disp_p.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                    st.download_button(
+                        label="📄 تحميل كشف المقبوضات (CSV)",
+                        data=csv_all_p,
+                        file_name="كشف_المقبوضات_المفلتر.csv",
+                        mime="text/csv",
+                        key="dl_all_p_csv"
+                    )
 
     # ---------------------------------------------------------
-    # RESET / WIPE DATABASE SECTION (تفريغ وتصفير البيانات)
+    # TAB 3: كشف المصروفات والصيانة (مصروفات)
     # ---------------------------------------------------------
-    st.markdown("### 🧹 أدوات إدارة الصندوق وإعادة التهيئة")
-    with st.expander("⚠️ تصفير وتفريغ بيانات الصندوق للبدء بسجلات جديدة"):
-        st.warning("⚠️ **تحذير:** عملية التصفير تقوم بتفريغ كافة المقبوضات والمصروفات المسجلة للبدء بسجل جديد خالٍ من البيانات الافتراضية.")
-        
-        reset_option = st.radio(
-            "اختر مستوى التصفير المطلوب:",
-            [
-                "تفريغ المقبوضات والمصروفات فقط (مع الإبقاء على قائمة الشقق والسكان)",
-                "تفريغ شامل وجذري (تصفير المقبوضات والمصروفات + حذف جميع الشقق للسماح بإدخالها من جديد)"
-            ]
+    with tab_expenses:
+        st.markdown("### 📤 كشف المصروفات والصيانة والفواتير")
+        st.caption("فلترة كافة مصاريف العمارة وصيانة المرافق حسب البند، التاريخ، أو الجهة المستلمة.")
+
+        if df_exps.empty:
+            st.info("لا توجد مصروفات مسجلة في الصندوق حتى الآن.")
+        else:
+            col_ef1, col_ef2, col_ef3 = st.columns(3)
+            with col_ef1:
+                df_exps["exp_ym"] = df_exps["expense_date"].astype(str).str.slice(0, 7) if "expense_date" in df_exps.columns else ""
+                exp_month_opts = ["جميع الفترات"] + sorted(list(set(df_exps["exp_ym"].dropna().tolist())), reverse=True)
+                sel_exp_month = st.selectbox("📅 فلترة بالشهر:", exp_month_opts, key="exp_filter_month")
+            with col_ef2:
+                cat_opts = ["جميع البنود والتصنيفات"] + sorted(list(set(df_exps["category"].dropna().astype(str).tolist()))) if "category" in df_exps.columns else ["جميع البنود والتصنيفات"]
+                sel_exp_cat = st.selectbox("🏷️ فلترة بالبند / التصنيف:", cat_opts, key="exp_filter_cat")
+            with col_ef3:
+                search_exp_kw = st.text_input("🔍 بحث (الجهة / التفاصيل / الفاتورة):", key="exp_filter_search")
+
+            # Apply filters
+            filtered_e = df_exps.copy()
+            if sel_exp_month != "جميع الفترات":
+                filtered_e = filtered_e[filtered_e["exp_ym"] == sel_exp_month]
+            if sel_exp_cat != "جميع البنود والتصنيفات":
+                filtered_e = filtered_e[filtered_e["category"].astype(str) == sel_exp_cat]
+            if search_exp_kw:
+                mask_e = (
+                    filtered_e["paid_to"].astype(str).str.contains(search_exp_kw, case=False, na=False) |
+                    filtered_e["description"].astype(str).str.contains(search_exp_kw, case=False, na=False) |
+                    filtered_e["invoice_ref"].astype(str).str.contains(search_exp_kw, case=False, na=False)
+                )
+                filtered_e = filtered_e[mask_e]
+
+            tot_filt_e = filtered_e["amount"].sum() if not filtered_e.empty else 0.0
+            count_filt_e = len(filtered_e)
+            top_cat = filtered_e.groupby("category")["amount"].sum().idxmax() if not filtered_e.empty and "category" in filtered_e.columns else "لا يوجد"
+
+            ek1, ek2, ek3 = st.columns(3)
+            with ek1:
+                st.markdown(f"""
+                    <div class="kpi-card danger">
+                        <div class="kpi-title">📤 إجمالي المصروفات المعروضة</div>
+                        <div class="kpi-value">{tot_filt_e:,.2f} د.أ</div>
+                        <div class="kpi-sub">{count_filt_e} حركة صرف</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with ek2:
+                st.markdown(f"""
+                    <div class="kpi-card info">
+                        <div class="kpi-title">📑 عدد سندات الصرف</div>
+                        <div class="kpi-value">{count_filt_e}</div>
+                        <div class="kpi-sub">فاتورة وسند مسجل</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with ek3:
+                st.markdown(f"""
+                    <div class="kpi-card warning">
+                        <div class="kpi-title">🏆 أعلى بند إنفاق</div>
+                        <div class="kpi-value" style="font-size:1.3rem;">{top_cat}</div>
+                        <div class="kpi-sub">البند الأكثر استهلاكاً</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Table display
+            cols_e_show = ["expense_date", "category", "amount", "paid_to", "description", "invoice_ref"]
+            e_exist = [c for c in cols_e_show if c in filtered_e.columns]
+            df_disp_e = filtered_e[e_exist].copy().rename(columns={
+                "expense_date": "تاريخ الصرف",
+                "category": "البند / التصنيف",
+                "amount": "المبلغ (د.أ)",
+                "paid_to": "الجهة المستلمة",
+                "description": "تفاصيل العمل / العطل",
+                "invoice_ref": "رقم الفاتورة / السند"
+            })
+            st.dataframe(df_disp_e, use_container_width=True, hide_index=True)
+
+            # Expense Breakdown Chart
+            if not filtered_e.empty and "category" in filtered_e.columns:
+                c_e_chart, c_e_dl = st.columns([2, 1])
+                with c_e_chart:
+                    cat_summary = filtered_e.groupby("category")["amount"].sum().reset_index()
+                    fig_ecat = px.pie(
+                        cat_summary,
+                        names="category",
+                        values="amount",
+                        hole=0.4,
+                        title="توزيع المصروفات حسب التصنيف والبند",
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    fig_ecat.update_layout(font=dict(family="Tajawal, sans-serif"))
+                    st.plotly_chart(fig_ecat, use_container_width=True)
+
+                with c_e_dl:
+                    st.markdown("##### 📥 تصدير كشف المصروفات:")
+                    excel_all_e = create_excel_download(df_disp_e, "كشف_المصروفات.xlsx")
+                    st.download_button(
+                        label="📊 تحميل كشف المصروفات (Excel)",
+                        data=excel_all_e,
+                        file_name="كشف_المصروفات_المفلتر.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dl_all_e_excel"
+                    )
+                    csv_all_e = df_disp_e.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                    st.download_button(
+                        label="📄 تحميل كشف المصروفات (CSV)",
+                        data=csv_all_e,
+                        file_name="كشف_المصروفات_المفلتر.csv",
+                        mime="text/csv",
+                        key="dl_all_e_csv"
+                    )
+
+    # ---------------------------------------------------------
+    # TAB 1: كشف حساب ساكن / شقة معينة (مدفوعات من شخص معين)
+    # ---------------------------------------------------------
+    with tab_resident:
+        st.markdown("### 👤 كشف حساب تفصيلي لشقة / ساكن معين")
+        st.caption("عرض سجل المقبوضات الخاصة بساكن محدد، مراجعة الأشهر المسددة والمتأخرة، وتصدير كشف الحساب أو إرساله عبر واتساب.")
+
+        if df_apts.empty:
+            st.warning("⚠️ لا توجد شقق مسجلة في النظام لاستخراج كشف الحساب.")
+        else:
+            apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r for _, r in df_apts.iterrows()}
+            selected_label = st.selectbox("اختر الشقة أو الساكن المراد استخراج كشف حسابه:", list(apt_map.keys()), key="res_stmt_select")
+            apt_info = apt_map[selected_label]
+            apt_no = str(apt_info.get("apt_no", ""))
+            resident_name = str(apt_info.get("resident_name", ""))
+            resident_phone = str(apt_info.get("phone", ""))
+            monthly_fee = float(apt_info.get("monthly_fee", 25.0))
+            resident_type = str(apt_info.get("resident_type", "مالك"))
+            floor = str(apt_info.get("floor", ""))
+
+            # Filter payments for this resident
+            res_pays = df_pays[df_pays["apt_no"].astype(str) == apt_no].copy() if not df_pays.empty and "apt_no" in df_pays.columns else pd.DataFrame()
+            
+            total_paid_res = res_pays["amount"].sum() if not res_pays.empty else 0.0
+            num_receipts = len(res_pays)
+            paid_months = sorted(list(set(res_pays["for_month"].dropna().astype(str).tolist()))) if not res_pays.empty and "for_month" in res_pays.columns else []
+
+            # Determine all relevant building months
+            all_bld_months = sorted(list(set(df_pays["for_month"].dropna().astype(str).tolist() + [date.today().strftime("%Y-%m")])), reverse=True) if not df_pays.empty and "for_month" in df_pays.columns else [date.today().strftime("%Y-%m")]
+            unpaid_months = [m for m in all_bld_months if m not in paid_months]
+            estimated_dues = len(unpaid_months) * monthly_fee
+
+            # KPI Cards for this resident
+            rc1, rc2, rc3, rc4 = st.columns(4)
+            with rc1:
+                st.markdown(f"""
+                    <div class="kpi-card info">
+                        <div class="kpi-title">🏢 بيانات الشقة</div>
+                        <div class="kpi-value" style="font-size:1.4rem;">شقة {apt_no}</div>
+                        <div class="kpi-sub">{resident_name} ({resident_type})</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with rc2:
+                st.markdown(f"""
+                    <div class="kpi-card success">
+                        <div class="kpi-title">💵 إجمالي المدفوعات المستلمة</div>
+                        <div class="kpi-value">{total_paid_res:,.2f} د.أ</div>
+                        <div class="kpi-sub">من أصل {num_receipts} سندات قبض</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with rc3:
+                st.markdown(f"""
+                    <div class="kpi-card warning">
+                        <div class="kpi-title">📅 الاشتراك الشهري المقرر</div>
+                        <div class="kpi-value">{monthly_fee:g} د.أ</div>
+                        <div class="kpi-sub">{floor}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with rc4:
+                d_color = "danger" if estimated_dues > 0 else "success"
+                st.markdown(f"""
+                    <div class="kpi-card {d_color}">
+                        <div class="kpi-title">⚠️ المتأخرات المترتبة</div>
+                        <div class="kpi-value">{estimated_dues:g} د.أ</div>
+                        <div class="kpi-sub">{len(unpaid_months)} أشهر غير مسددة</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Month Status Summary
+            col_pm, col_um = st.columns(2)
+            with col_pm:
+                st.markdown("##### ✅ الأشهر المسددة:")
+                if paid_months:
+                    st.write(" ، ".join([f"`{m}`" for m in paid_months]))
+                else:
+                    st.info("لا توجد أشهر مسددة مسجلة بعد.")
+
+            with col_um:
+                st.markdown("##### ⚠️ الأشهر المتأخرة / غير المسددة:")
+                if unpaid_months:
+                    st.write(" ، ".join([f"`{m}`" for m in unpaid_months]))
+                else:
+                    st.success("🎉 كافة الأشهر مسددة بالكامل حتى الآن!")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Detail Table
+            st.markdown(f"##### 📋 سجل الدفعات وسندات القبض لشقة ({apt_no}) - {resident_name}:")
+            if not res_pays.empty:
+                cols_to_show = ["payment_date", "receipt_no", "for_month", "amount", "payment_method", "notes"]
+                existing_cols = [c for c in cols_to_show if c in res_pays.columns]
+                df_disp_res = res_pays[existing_cols].copy()
+                col_rename = {
+                    "payment_date": "تاريخ الاستلام",
+                    "receipt_no": "رقم السند",
+                    "for_month": "عن شهر",
+                    "amount": "المبلغ (د.أ)",
+                    "payment_method": "طريقة الدفع",
+                    "notes": "الملاحظات"
+                }
+                df_disp_res = df_disp_res.rename(columns=col_rename)
+                st.dataframe(df_disp_res, use_container_width=True, hide_index=True)
+
+                # Export & WhatsApp
+                c_act1, c_act2, c_act3 = st.columns([1.5, 1.5, 2.5])
+                with c_act1:
+                    excel_res = create_excel_download(df_disp_res, f"كشف_حساب_شقة_{apt_no}.xlsx")
+                    st.download_button(
+                        label="📊 تصدير كشف الحساب (Excel)",
+                        data=excel_res,
+                        file_name=f"كشف_حساب_شقة_{apt_no}_{resident_name}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="btn_dl_res_excel"
+                    )
+                with c_act2:
+                    csv_res = df_disp_res.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                    st.download_button(
+                        label="📄 تصدير كشف الحساب (CSV)",
+                        data=csv_res,
+                        file_name=f"كشف_حساب_شقة_{apt_no}_{resident_name}.csv",
+                        mime="text/csv",
+                        key="btn_dl_res_csv"
+                    )
+                with c_act3:
+                    wa_res_text = (
+                        f"مرحباً جارنا العزيز {resident_name} المحترم، تحية طيبة من لجنة العمارة (إشراف المهندس أبو عادل). 🌸\n\n"
+                        f"📊 *كشف حساب اشتراك خدمات العمارة لشقة رقم ({apt_no}):*\n"
+                        f"▪️ إجمالي المبالغ المسددة المستلمة: {total_paid_res:,.2f} دينار ({num_receipts} دفعات)\n"
+                        f"▪️ الأشهر المسددة: {', '.join(paid_months) if paid_months else 'لا يوجد'}\n"
+                    )
+                    if unpaid_months:
+                        wa_res_text += f"▪️ الأشهر المتبقية للاشتراك: {', '.join(unpaid_months)} بقيمة إجمالية ({estimated_dues:g} دينار)\n"
+                    else:
+                        wa_res_text += "▪️ الرصيد: مسدد بالكامل حتى تاريخه بارك الله بكم.\n"
+                    wa_res_text += "\nشاكرين ومقدرين حسن تعاونكم الدائم وحرصكم على راحة وخدمات العمارة."
+                    wa_res_url = generate_whatsapp_link(resident_phone, wa_res_text)
+                    st.markdown(f"""
+                        <a href="{wa_res_url}" target="_blank" class="whatsapp-link" style="width:100%; text-align:center;">
+                            📱 إرسال كشف الحساب للساكن عبر واتساب
+                        </a>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info(f"لا توجد أي سندات مقبوضات مسجلة لشقة ({apt_no}) حتى الآن.")
+
+    # ---------------------------------------------------------
+    # TAB 4: ميزان المراجعة والتدفق المالي (تقرير سنوي وشهري)
+    # ---------------------------------------------------------
+    with tab_balance:
+        st.markdown("### ⚖️ ميزان المراجعة والتدفق المالي الشهري والسنوي")
+        st.caption("مقارنة تحليلية دقيقة بين المقبوضات والمصروفات لكل شهر لمعرفة الفائض أو العجز المتراكم.")
+
+        # Aggregate monthly
+        all_months_set = set()
+        if not df_pays.empty and "for_month" in df_pays.columns:
+            all_months_set.update(df_pays["for_month"].dropna().astype(str).tolist())
+        if not df_exps.empty and "expense_date" in df_exps.columns:
+            all_months_set.update(df_exps["expense_date"].astype(str).str.slice(0, 7).dropna().tolist())
+        all_months_set.add(date.today().strftime("%Y-%m"))
+
+        months_list = sorted(list(all_months_set), reverse=True)
+
+        tb_records = []
+        for ym in sorted(list(all_months_set)):
+            p_val = df_pays[df_pays["for_month"].astype(str) == ym]["amount"].sum() if not df_pays.empty and "for_month" in df_pays.columns else 0.0
+            e_val = df_exps[df_exps["expense_date"].astype(str).str.slice(0, 7) == ym]["amount"].sum() if not df_exps.empty and "expense_date" in df_exps.columns else 0.0
+            net_val = p_val - e_val
+            tb_records.append({
+                "الشهر": ym,
+                "إجمالي المقبوضات (د.أ)": p_val,
+                "إجمالي المصروفات (د.أ)": e_val,
+                "الصافي / الفارق (د.أ)": net_val,
+                "الحالة": "فائض 🟢" if net_val > 0 else ("عجز 🔴" if net_val < 0 else "متعادل ⚪")
+            })
+
+        df_tb = pd.DataFrame(tb_records)
+
+        tot_in_all = df_tb["إجمالي المقبوضات (د.أ)"].sum() if not df_tb.empty else 0.0
+        tot_out_all = df_tb["إجمالي المصروفات (د.أ)"].sum() if not df_tb.empty else 0.0
+        cum_balance = tot_in_all - tot_out_all
+
+        tb1, tb2, tb3 = st.columns(3)
+        with tb1:
+            st.markdown(f"""
+                <div class="kpi-card success">
+                    <div class="kpi-title">📥 إجمالي المقبوضات التراكمية</div>
+                    <div class="kpi-value">{tot_in_all:,.2f} د.أ</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with tb2:
+            st.markdown(f"""
+                <div class="kpi-card danger">
+                    <div class="kpi-title">📤 إجمالي المصروفات التراكمية</div>
+                    <div class="kpi-value">{tot_out_all:,.2f} د.أ</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with tb3:
+            bal_cls = "success" if cum_balance >= 0 else "danger"
+            st.markdown(f"""
+                <div class="kpi-card {bal_cls}">
+                    <div class="kpi-title">💵 الرصيد الصافي الفعلي في الصندوق</div>
+                    <div class="kpi-value">{cum_balance:,.2f} د.أ</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        if not df_tb.empty:
+            st.dataframe(df_tb.sort_values(by="الشهر", ascending=False), use_container_width=True, hide_index=True)
+
+            excel_tb = create_excel_download(df_tb, "ميزان_المراجعة.xlsx")
+            st.download_button(
+                label="📊 تحميل ميزان المراجعة كاملاً (Excel)",
+                data=excel_tb,
+                file_name="ميزان_المراجعة_والتدفق_المالي.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_dl_tb"
+            )
+
+    # ---------------------------------------------------------
+    # TAB 5: كشف الذمم والمتأخرات التراكمية (كشف ديون الشقق)
+    # ---------------------------------------------------------
+    with tab_aging:
+        st.markdown("### ⚠️ كشف الذمم والمتأخرات التراكمية للشقق")
+        st.caption("كشف شامل يرصد التزام كل شقة، حصر المبالغ المتأخرة، وإمكانية إرسال تذكيرات فورية عبر واتساب.")
+
+        if df_apts.empty:
+            st.info("لا توجد شقق مسجلة في النظام.")
+        else:
+            sel_aging_month = st.selectbox("📅 تقييم المتأخرات حتى شهر:", months_list, index=0, key="aging_eval_month")
+
+            aging_records = []
+            for _, apt in df_apts.iterrows():
+                ano = str(apt.get("apt_no", ""))
+                rname = str(apt.get("resident_name", ""))
+                rphone = str(apt.get("phone", ""))
+                mfee = float(apt.get("monthly_fee", 25.0))
+                rtype = str(apt.get("resident_type", "مالك"))
+
+                # Check payments for this apt
+                apt_p = df_pays[df_pays["apt_no"].astype(str) == ano] if not df_pays.empty and "apt_no" in df_pays.columns else pd.DataFrame()
+                p_months = set(apt_p["for_month"].dropna().astype(str).tolist()) if not apt_p.empty and "for_month" in apt_p.columns else set()
+
+                is_paid_current = (sel_aging_month in p_months)
+                
+                # Check how many months unpaid up to selected month
+                # Consider relevant months
+                eval_unpaid = [m for m in months_list if m not in p_months and m <= sel_aging_month]
+                total_due = len(eval_unpaid) * mfee
+
+                aging_records.append({
+                    "رقم الشقة": ano,
+                    "اسم الساكن": rname,
+                    "الصفة": rtype,
+                    "رقم الهاتف": rphone,
+                    "الاشتراك الشهري (د.أ)": mfee,
+                    "حالة الشهر المحدد": "مسدد 🟢" if is_paid_current else "غير مسدد 🔴",
+                    "عدد الأشهر المتأخرة": len(eval_unpaid),
+                    "إجمالي الذمة المستحقة (د.أ)": total_due,
+                    "الأشهر غير المسددة": " ، ".join(eval_unpaid) if eval_unpaid else "مسدد بالكامل"
+                })
+
+            df_aging = pd.DataFrame(aging_records)
+
+            tot_aging_dues = df_aging["إجمالي الذمة المستحقة (د.أ)"].sum()
+            unpaid_apts_count = len(df_aging[df_aging["عدد الأشهر المتأخرة"] > 0])
+            fully_paid_count = len(df_aging) - unpaid_apts_count
+
+            ak1, ak2, ak3 = st.columns(3)
+            with ak1:
+                st.markdown(f"""
+                    <div class="kpi-card danger">
+                        <div class="kpi-title">⚠️ إجمالي الذمم والمتأخرات غير المحصلة</div>
+                        <div class="kpi-value">{tot_aging_dues:,.2f} د.أ</div>
+                        <div class="kpi-sub">مستحقات واجبة التحصيل</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with ak2:
+                st.markdown(f"""
+                    <div class="kpi-card warning">
+                        <div class="kpi-title">🏢 عدد الشقق المتأخرة</div>
+                        <div class="kpi-value">{unpaid_apts_count} شقق</div>
+                        <div class="kpi-sub">من أصل {len(df_apts)} شقة</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            with ak3:
+                st.markdown(f"""
+                    <div class="kpi-card success">
+                        <div class="kpi-title">✅ الشقق المسددة بالكامل</div>
+                        <div class="kpi-value">{fully_paid_count} شقق</div>
+                        <div class="kpi-sub">التزام تام بالسداد</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Display interactive list with action buttons
+            st.markdown("##### 📋 جدول المتابعة ومطالبات الشقق:")
+            for idx, a_row in df_aging.iterrows():
+                c_ag1, c_ag2, c_ag3, c_ag4, c_ag5 = st.columns([1.2, 2.5, 1.5, 1.5, 2.5])
+                with c_ag1:
+                    st.markdown(f"**شقة {a_row['رقم الشقة']}**<br><small>{a_row['الصفة']}</small>", unsafe_allow_html=True)
+                with c_ag2:
+                    st.markdown(f"**{a_row['اسم الساكن']}**<br><small>{a_row['رقم الهاتف']}</small>", unsafe_allow_html=True)
+                with c_ag3:
+                    if a_row["عدد الأشهر المتأخرة"] == 0:
+                        st.markdown("<span class='badge badge-success'>مسدد بالكامل 🟢</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<span class='badge badge-danger'>متأخر ({a_row['عدد الأشهر المتأخرة']}) شهر</span>", unsafe_allow_html=True)
+                with c_ag4:
+                    st.markdown(f"**{a_row['إجمالي الذمة المستحقة (د.أ)']:g} د.أ**", unsafe_allow_html=True)
+                with c_ag5:
+                    if a_row["عدد الأشهر المتأخرة"] > 0:
+                        wa_ag_msg = (
+                            f"مرحباً جارنا العزيز {a_row['اسم الساكن']} المحترم، تحية طيبة من لجنة العمارة (إشراف المهندس أبو عادل). 🌸\n"
+                            f"نود تذكيركم بلطف بوجود ذمة اشتراك خدمات عمارة مترتبة لشقة رقم ({a_row['رقم الشقة']}) بقيمة إجمالية ({a_row['إجمالي الذمة المستحقة (د.أ)']:g} دينار) "
+                            f"عن الأشهر ({a_row['الأشهر غير المسددة']}).\n"
+                            f"شاكرين ومقدرين حسن تعاونكم الدائم في الحفاظ على خدمات وصيانة العمارة."
+                        )
+                        wa_ag_url = generate_whatsapp_link(a_row["رقم الهاتف"], wa_ag_msg)
+                        st.markdown(f"""
+                            <a href="{wa_ag_url}" target="_blank" class="whatsapp-link" style="padding:5px 12px; font-size:0.83rem;">
+                                📱 مطالبة عبر واتساب
+                            </a>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("<small style='color:#10b981;'>لا توجد متأخرات 🌸</small>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin:6px 0; border-color:#f1f5f9;'>", unsafe_allow_html=True)
+
+            # Export Aging Table
+            st.markdown("<br>", unsafe_allow_html=True)
+            excel_aging = create_excel_download(df_aging, "كشف_المتأخرات_والذمم.xlsx")
+            st.download_button(
+                label="📊 تحميل كشف المتأخرات والذمم كاملاً (Excel)",
+                data=excel_aging,
+                file_name=f"كشف_المتأخرات_حتى_شهر_{sel_aging_month}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_dl_aging"
+            )
+
+    # ---------------------------------------------------------
+    # TAB 6: تقرير الواتساب الشهري وإعادة التهيئة
+    # ---------------------------------------------------------
+    with tab_other:
+        st.markdown("### 📱 مولّد التقرير الشهري الجاهز لجروب واتساب العمارة")
+        st.caption("توليد نص مالي رسمي منسق وجاهز للنشر المباشر في مجموعة الجيران لتحقيق الشفافية المطلقة.")
+
+        rep_month_sel = st.selectbox("📅 اختر شهر التقرير للنشر:", months_list, index=0, key="wa_rep_month_select")
+
+        # Calculate month figures
+        m_in = df_pays[df_pays["for_month"].astype(str) == rep_month_sel]["amount"].sum() if not df_pays.empty and "for_month" in df_pays.columns else 0.0
+        m_out = df_exps[df_exps["expense_date"].astype(str).str.slice(0, 7) == rep_month_sel]["amount"].sum() if not df_exps.empty and "expense_date" in df_exps.columns else 0.0
+        m_net = m_in - m_out
+
+        exp_m_df = df_exps[df_exps["expense_date"].astype(str).str.slice(0, 7) == rep_month_sel] if not df_exps.empty and "expense_date" in df_exps.columns else pd.DataFrame()
+        exp_details_str = ""
+        if not exp_m_df.empty and "category" in exp_m_df.columns:
+            for _, row in exp_m_df.iterrows():
+                cat = row.get("category", "مصروف")
+                amt = float(row.get("amount", 0.0))
+                desc = row.get("description", "")
+                exp_details_str += f"▫️ {cat}: {amt:g} د.أ ({desc})\n"
+        else:
+            exp_details_str = "▫️ لا توجد مصروفات مسجلة خلال هذا الشهر.\n"
+
+        wa_group_report = (
+            f"🏛️ *التقرير المالي الشهري لصندوق العمارة السكنية*\n"
+            f"🗓️ *عن شهر:* {get_arabic_month_name(rep_month_sel)}\n"
+            f"إشراف: المهندس أبو عادل\n"
+            f"---------------------------------\n"
+            f"💰 *الملخص المالي:* \n"
+            f"▪️ إجمالي التحصيلات والمقبوضات: {m_in:,.2f} دينار\n"
+            f"▪️ إجمالي المصروفات والصيانة: {m_out:,.2f} دينار\n"
+            f"---------------------------------\n"
+            f"🔹 *الرصيد الصافي المتبقي بالصندوق:* {m_net:,.2f} دينار\n\n"
+            f"📋 *تفاصيل البنود والمصروفات:* \n"
+            f"{exp_details_str}\n"
+            f"أتقدم بجزيل الشكر لكافة الجيران الأفاضل الملتزمين بالسداد في الموعد المحدد لضمان جودة الخدمات واستمرار الصيانة.\n"
+            f"مع خالص التحية، لجنة العمارة - المهندس أبو عادل 🌸"
         )
 
-        confirm_reset = st.checkbox("أنا متأكد من رغبتي في تصفير وتفريغ قاعدة البيانات")
+        st.text_area("انسخ النص أدناه وانشره مباشرة في مجموعات الواتساب:", value=wa_group_report, height=260)
 
-        if st.button("🚨 تنفيذ تصفير وتفريغ قاعدة البيانات الآن"):
-            if confirm_reset:
-                wipe_apts = ("تفريغ شامل" in reset_option)
-                db_engine.clear_all_data(clear_apartments=wipe_apts)
-                st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
-            else:
-                st.error("يرجى وضع علامة صح على مربع التأكيد قبل الضغط على زر التصفير.")
+        st.markdown("<br><hr>", unsafe_allow_html=True)
+
+        # Database Reset Tool
+        st.markdown("### 🧹 أدوات إدارة الصندوق وإعادة التهيئة")
+        with st.expander("⚠️ تصفير وتفريغ بيانات الصندوق للبدء بسجلات جديدة"):
+            st.warning("⚠️ **تحذير:** عملية التصفير تقوم بتفريغ كافة المقبوضات والمصروفات المسجلة للبدء بسجل جديد خالٍ من البيانات الافتراضية.")
+            
+            reset_option = st.radio(
+                "اختر مستوى التصفير المطلوب:",
+                [
+                    "تفريغ المقبوضات والمصروفات فقط (مع الإبقاء على قائمة الشقق والسكان)",
+                    "تفريغ شامل وجذري (تصفير المقبوضات والمصروفات + حذف جميع الشقق للسماح بإدخالها من جديد)"
+                ]
+            )
+
+            confirm_reset = st.checkbox("أنا متأكد من رغبتي في تصفير وتفريغ قاعدة البيانات")
+
+            if st.button("🚨 تنفيذ تصفير وتفريغ قاعدة البيانات الآن"):
+                if confirm_reset:
+                    wipe_apts = ("تفريغ شامل" in reset_option)
+                    db_engine.clear_all_data(clear_apartments=wipe_apts)
+                    st.experimental_rerun() if hasattr(st, 'experimental_rerun') else st.rerun()
+                else:
+                    st.error("يرجى وضع علامة صح على مربع التأكيد قبل الضغط على زر التصفير.")
 
 # ---------------------------------------------------------
 # MAIN APP ENTRY POINT & SIDEBAR NAVIGATION
