@@ -1057,7 +1057,7 @@ def render_apartments_page(db_engine: BuildingFundDB):
 
         selected_existing = None
         if edit_mode == "تعديل بيانات شقة حالية" and not df_apts.empty:
-            apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r for _, r in df_apts.iterrows()}
+            apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r.to_dict() for _, r in df_apts.iterrows()}
             
             # Auto-select if clicked edit from list
             default_index = 0
@@ -1422,7 +1422,7 @@ def render_reports_page(db_engine: BuildingFundDB):
         if df_apts.empty:
             st.warning("⚠️ لا توجد شقق مسجلة في النظام لاستخراج كشف الحساب.")
         else:
-            apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r for _, r in df_apts.iterrows()}
+            apt_map = {f"شقة {r['apt_no']} - {r['resident_name']}": r.to_dict() for _, r in df_apts.iterrows()}
             selected_label = st.selectbox("اختر الشقة أو الساكن المراد استخراج كشف حسابه:", list(apt_map.keys()), key="res_stmt_select")
             apt_info = apt_map[selected_label]
             apt_no = str(apt_info.get("apt_no", ""))
