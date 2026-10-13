@@ -3,6 +3,7 @@ serviceAccountKey.json
 *.pem
 .env
 .streamlit/secrets.toml
+.firebase/
 
 # Python cache & venv
 __pycache__/
