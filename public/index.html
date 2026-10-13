@@ -2,13 +2,17 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>صندوق العمارة السكنية | المهندس أبو عادل</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>صندوق العمارة السكنية | نظام الصناديق المشتركة</title>
   
-  <!-- Favicon & PWA -->
+  <!-- Favicon & PWA iOS/Android -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%3E<text y=%2226%22 font-size=%2226%22>🏛️</text></svg>">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="صندوق العمارة">
+  <meta name="format-detection" content="telephone=no">
   
   <!-- CSS Stylesheet -->
   <link rel="stylesheet" href="css/style.css">
@@ -27,8 +31,8 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="sidebar-logo">🏛️</div>
-      <h2 class="sidebar-title">صندوق العمارة</h2>
-      <p class="sidebar-subtitle">إشراف المهندس أبو عادل</p>
+      <h2 class="sidebar-title" id="side-building-name">صندوق العمارة</h2>
+      <p class="sidebar-subtitle" id="side-manager-name">إشراف المشرف المالي</p>
     </div>
 
     <nav class="sidebar-nav">
@@ -56,10 +60,10 @@
 
     <div class="sidebar-footer">
       <div class="user-badge">
-        <div class="user-avatar">م</div>
+        <div class="user-avatar" id="side-avatar">م</div>
         <div class="user-info">
-          <div class="user-name">المهندس أبو عادل</div>
-          <div class="user-role">مشرف وأمين الصندوق</div>
+          <div class="user-name" id="user-badge-name">المشرف المالي</div>
+          <div class="user-role" id="user-badge-role">أمين الصندوق</div>
         </div>
       </div>
       <div class="db-status-badge">
@@ -82,9 +86,8 @@
       </div>
 
       <div class="header-actions">
-        <button class="btn btn-outline" id="btn-lock-toggle" title="قفل / فتح صلاحيات الإدارة">
-          <span id="lock-icon">🔒</span>
-          <span id="lock-text">المسؤول مسجل</span>
+        <button class="btn btn-outline" id="btn-auth-logout" title="تسجيل الخروج أو التبديل لعمارة أخرى" style="padding:7px 12px; font-size:0.85rem;">
+          <span>🚪 خروج / تبديل</span>
         </button>
         <button class="btn btn-primary" id="btn-quick-receipt">
           <span>+ سند قبض فوري</span>
@@ -921,6 +924,97 @@
       <button class="btn btn-outline" onclick="closeModal('modal-reset')">إلغاء</button>
       <button class="btn btn-danger" id="btn-execute-reset">تنفيذ التصفير الآن</button>
     </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     AUTH OVERLAY: LOGIN & NEW BUILDING REGISTRATION
+========================================================= -->
+<div class="auth-wrapper" id="auth-overlay">
+  <div class="auth-card">
+    <div class="auth-header">
+      <div class="auth-logo">🏛️</div>
+      <h2 class="auth-title">منصة صناديق العمارات السكنية</h2>
+      <p class="auth-sub">إدارة مالية شفافة ومستقلة لكل عمارة على حدة</p>
+    </div>
+
+    <!-- Tab Switcher: Login vs New Building -->
+    <div class="auth-tab-switch">
+      <button class="auth-tab-btn active" id="btn-auth-tab-login" type="button">
+        🔐 تسجيل الدخول لصندوق العمارة
+      </button>
+      <button class="auth-tab-btn" id="btn-auth-tab-register" type="button">
+        🏢 إنشاء صندوق لعمارة جديدة
+      </button>
+    </div>
+
+    <!-- Form 1: Login Form -->
+    <form id="form-auth-login">
+      <div class="form-group">
+        <label class="form-label">اسم المستخدم / كود العمارة:</label>
+        <input type="text" class="form-control" id="login-username" value="abuadel" placeholder="مثال: abuadel" required autocomplete="username">
+        <small style="color:#64748b; font-size:0.8rem; display:block; margin-top:3px;">صندوق المهندس أبو عادل: <code>abuadel</code></small>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">كلمة المرور:</label>
+        <input type="password" class="form-control" id="login-password" value="abuadel2026" placeholder="أدخل كلمة المرور" required autocomplete="current-password">
+        <small style="color:#64748b; font-size:0.8rem; display:block; margin-top:3px;">كلمة المرور الافتراضية: <code>abuadel2026</code></small>
+      </div>
+
+      <button type="submit" class="btn btn-primary" id="btn-submit-login" style="width:100%; padding:12px; margin-top:10px; font-size:1rem;">
+        <span>🚪 دخول إلى لوحة تحكّم الصندوق</span>
+      </button>
+      <button type="button" class="btn btn-outline" id="btn-quick-fill-demo" style="width:100%; margin-top:8px; font-size:0.85rem; border-style:dashed;">
+        <span>💡 دخول فوري تجريبي (عمارة المهندس أبو عادل)</span>
+      </button>
+    </form>
+
+    <!-- Form 2: Register New Building Form -->
+    <form id="form-auth-register" style="display:none;">
+      <div class="form-group">
+        <label class="form-label">اسم العمارة أو المجمع السكني:</label>
+        <input type="text" class="form-control" id="reg-bld-name" placeholder="مثال: عمارة النور والياسمين" required>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">كود / يوزر العمارة (إنجليزي):</label>
+          <input type="text" class="form-control" id="reg-bld-user" placeholder="مثال: alnoor" required>
+          <small style="color:#64748b; font-size:0.75rem;">يستخدم لتسجيل الدخول</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label">كلمة مرور الصندوق:</label>
+          <input type="password" class="form-control" id="reg-bld-pass" placeholder="كلمة سر خاصة بك" required>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">اسم المشرف / أمين الصندوق:</label>
+          <input type="text" class="form-control" id="reg-bld-manager" placeholder="مثال: أبو طارق" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">رقم هاتف المشرف:</label>
+          <input type="tel" class="form-control" id="reg-bld-phone" placeholder="079XXXXXXX">
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">الاشتراك الشهري (د.أ):</label>
+          <input type="number" step="1" class="form-control" id="reg-bld-fee" value="25" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">عدد شقق العمارة:</label>
+          <input type="number" step="1" min="1" max="100" class="form-control" id="reg-bld-count" value="10" required>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-success" style="width:100%; padding:12px; margin-top:10px; font-size:1rem;">
+        <span>✨ إنشاء صندوق العمارة والبدء فوراً</span>
+      </button>
+    </form>
   </div>
 </div>
 

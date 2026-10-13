@@ -1,11 +1,12 @@
 // =========================================================
 // Main Application Logic & Interactivity
-// Sandoq Building Fund | المهندس أبو عادل
+// Multi-Building Platform | منصة صناديق العمارات السكنية
 // =========================================================
 
 import { store } from "./db.js";
 
 // Global State
+let currentBuilding = null;
 let currentApartments = [];
 let currentPayments = [];
 let currentExpenses = [];
@@ -15,15 +16,25 @@ let selectedResidentApt = null;
 
 // Initialize on DOM Ready
 document.addEventListener("DOMContentLoaded", () => {
+  setupAuth();
   setupNavigation();
   setupForms();
   setupReportsTabs();
   setupModals();
   setDefaultDates();
 
-  // Subscribe to DB Store
+  // Subscribe to Multi-Tenant DB Store
   store.subscribe(handleDataUpdate);
-  store.initRealtime();
+
+  // Check Active Session
+  const activeSession = store.getActiveSession();
+  if (activeSession) {
+    hideAuthOverlay();
+    store.currentBuilding = activeSession;
+    store.initRealtime(activeSession.id);
+  } else {
+    showAuthOverlay();
+  }
 });
 
 // Toast notification helper
@@ -60,15 +71,18 @@ function getArabicMonthName(ymStr) {
   return `${monthNames[month - 1] || month} ${year}`;
 }
 
-// Convert numbers to Arabic words for receipts (simple Jordan JOD format)
+// Convert numbers to Arabic words for receipts (Jordanian Dinars format)
 function numberToArabicWords(amount) {
   const intVal = Math.floor(amount);
   const wordsMap = {
+    5: "خمسة دنانير أردنية",
     10: "عشرة دنانير أردنية",
     15: "خمسة عشر ديناراً أردنياً",
-    20: "عشرون ديناراً أردنياً",
+    20: "عشرون ديناراً أردنية",
     25: "خمسة وعشرون ديناراً أردنياً",
     30: "ثلاثون ديناراً أردنياً",
+    35: "خمسة وثلاثون ديناراً أردنياً",
+    40: "أربعون ديناراً أردنياً",
     50: "خمسون ديناراً أردنياً",
     75: "خمسة وسبعون ديناراً أردنياً",
     100: "مائة دينار أردني"
@@ -87,6 +101,106 @@ function generateWhatsAppUrl(phone, text) {
   return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`;
 }
 
+// =========================================================
+// AUTHENTICATION & MULTI-BUILDING SWITCHING
+// =========================================================
+function setupAuth() {
+  const authOverlay = document.getElementById("auth-overlay");
+  const tabLogin = document.getElementById("btn-auth-tab-login");
+  const tabRegister = document.getElementById("btn-auth-tab-register");
+  const formLogin = document.getElementById("form-auth-login");
+  const formRegister = document.getElementById("form-auth-register");
+  const btnLogout = document.getElementById("btn-auth-logout");
+
+  // Tab switching
+  tabLogin?.addEventListener("click", () => {
+    tabLogin.classList.add("active");
+    tabRegister.classList.remove("active");
+    formLogin.style.display = "block";
+    formRegister.style.display = "none";
+  });
+
+  tabRegister?.addEventListener("click", () => {
+    tabRegister.classList.add("active");
+    tabLogin.classList.remove("active");
+    formLogin.style.display = "none";
+    formRegister.style.display = "block";
+  });
+
+  // Login Submit
+  formLogin?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = document.getElementById("login-username").value;
+    const password = document.getElementById("login-password").value;
+
+    const res = await store.login(username, password);
+    if (res.success) {
+      showToast(`مرحباً بكم في ${res.building.name}! 🌸`);
+      hideAuthOverlay();
+    } else {
+      showToast(res.error || "خطأ في تسجيل الدخول", "danger");
+    }
+  });
+
+  // Quick Demo Login
+  document.getElementById("btn-quick-fill-demo")?.addEventListener("click", async () => {
+    document.getElementById("login-username").value = "abuadel";
+    document.getElementById("login-password").value = "abuadel2026";
+    const res = await store.login("abuadel", "abuadel2026");
+    if (res.success) {
+      showToast(`مرحباً بكم في ${res.building.name}! 🌸`);
+      hideAuthOverlay();
+    }
+  });
+
+  // Register New Building Submit
+  formRegister?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("reg-bld-name").value;
+    const username = document.getElementById("reg-bld-user").value;
+    const password = document.getElementById("reg-bld-pass").value;
+    const manager = document.getElementById("reg-bld-manager").value;
+    const phone = document.getElementById("reg-bld-phone").value;
+    const fee = document.getElementById("reg-bld-fee").value;
+    const count = document.getElementById("reg-bld-count").value;
+
+    try {
+      const bData = await store.registerBuilding({
+        name,
+        username,
+        password,
+        manager_name: manager,
+        phone,
+        default_monthly_fee: fee,
+        apt_count: count
+      });
+
+      showToast(`تهانينا! تم إنشاء ${bData.name} بنجاح! 🎉`);
+      hideAuthOverlay();
+    } catch (err) {
+      showToast(err.message, "danger");
+    }
+  });
+
+  // Logout / Switch Building
+  btnLogout?.addEventListener("click", () => {
+    if (confirm("هل تريد تسجيل الخروج أو التبديل إلى عمارة أخرى؟")) {
+      store.logout();
+      showAuthOverlay();
+    }
+  });
+}
+
+function showAuthOverlay() {
+  const el = document.getElementById("auth-overlay");
+  if (el) el.style.display = "flex";
+}
+
+function hideAuthOverlay() {
+  const el = document.getElementById("auth-overlay");
+  if (el) el.style.display = "none";
+}
+
 // Navigation Setup
 function setupNavigation() {
   const navItems = document.querySelectorAll(".nav-item, .mobile-nav-item");
@@ -95,18 +209,16 @@ function setupNavigation() {
       const targetSec = item.dataset.section;
       if (!targetSec) return;
 
-      // Update Active Nav
       document.querySelectorAll(".nav-item").forEach(n => n.classList.toggle("active", n.dataset.section === targetSec));
       document.querySelectorAll(".mobile-nav-item").forEach(n => n.classList.toggle("active", n.dataset.section === targetSec));
 
-      // Show Section
       document.querySelectorAll(".app-section").forEach(s => s.classList.remove("active"));
       const activeEl = document.getElementById(`section-${targetSec}`);
       if (activeEl) activeEl.classList.add("active");
 
-      // Update Title
+      const bName = currentBuilding ? currentBuilding.name : "صندوق العمارة";
       const titles = {
-        dashboard: { title: "لوحة المؤشرات والقيادة", sub: "الملخص المالي والعمليات الأخيرة لصندوق خدمات العمارة" },
+        dashboard: { title: "لوحة المؤشرات والقيادة", sub: `الملخص المالي والعمليات الأخيرة لـ ${bName}` },
         payment: { title: "تسجيل مقبوضات (سند قبض)", sub: "استلام وتوثيق اشتراكات الشقق وإصدار إيصالات رسمية" },
         expense: { title: "تسجيل مصاريف (سند صرف)", sub: "توثيق نفقات الصيانة والفواتير ومشتريات مرافق العمارة" },
         apartments: { title: "دليل الشقق والسكان", sub: "قائمة الشقق، بيانات السكان، أرقام الهواتف، ومتابعة الالتزام" },
@@ -116,10 +228,10 @@ function setupNavigation() {
         document.getElementById("header-page-title").textContent = titles[targetSec].title;
         document.getElementById("header-page-sub").textContent = titles[targetSec].sub;
       }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     });
   });
 
-  // Header quick buttons
   document.getElementById("btn-quick-receipt")?.addEventListener("click", () => {
     document.querySelector('.nav-item[data-section="payment"]')?.click();
   });
@@ -151,10 +263,29 @@ function setDefaultDates() {
 }
 
 // Handle Data update from Firestore / Store
-function handleDataUpdate({ apartments, payments, expenses }) {
+function handleDataUpdate({ building, apartments, payments, expenses }) {
+  currentBuilding = building;
   currentApartments = apartments;
   currentPayments = payments;
   currentExpenses = expenses;
+
+  // Update Building Header Info
+  if (currentBuilding) {
+    const sideTitle = document.getElementById("side-building-name");
+    if (sideTitle) sideTitle.textContent = currentBuilding.name;
+    const sideSub = document.getElementById("side-manager-name");
+    if (sideSub) sideSub.textContent = `إشراف ${currentBuilding.manager_name || 'أمين الصندوق'}`;
+
+    const uName = document.getElementById("user-badge-name");
+    if (uName) uName.textContent = currentBuilding.manager_name || 'أمين الصندوق';
+    const uRole = document.getElementById("user-badge-role");
+    if (uRole) uRole.textContent = currentBuilding.name;
+
+    const av = document.getElementById("side-avatar");
+    if (av && currentBuilding.manager_name) {
+      av.textContent = currentBuilding.manager_name.charAt(0);
+    }
+  }
 
   renderDashboard();
   renderApartments();
@@ -169,7 +300,6 @@ function handleDataUpdate({ apartments, payments, expenses }) {
 
 // Populate Apartment & Month Dropdowns
 function populateDropdowns() {
-  // 1. Payment apartment select
   const payAptSelect = document.getElementById("pay-apt-select");
   if (payAptSelect) {
     const curVal = payAptSelect.value;
@@ -180,7 +310,6 @@ function populateDropdowns() {
     if (curVal) payAptSelect.value = curVal;
   }
 
-  // 2. Filter dropdowns in reports
   const filtPayApt = document.getElementById("filt-pay-apt");
   if (filtPayApt) {
     const curApt = filtPayApt.value;
@@ -191,7 +320,6 @@ function populateDropdowns() {
     if (curApt) filtPayApt.value = curApt;
   }
 
-  // 3. Resident statement select
   const resSelect = document.getElementById("select-res-stmt");
   if (resSelect) {
     const curSel = resSelect.value;
@@ -203,7 +331,6 @@ function populateDropdowns() {
     else if (currentApartments.length > 0) resSelect.value = currentApartments[0].apt_no;
   }
 
-  // 4. Months for filters & WhatsApp report
   const monthsSet = new Set();
   const currentYm = new Date().toISOString().slice(0, 7);
   monthsSet.add(currentYm);
@@ -241,7 +368,6 @@ function populateDropdowns() {
     if (curM) waMonth.value = curM;
   }
 
-  // 5. Expense categories filter
   const filtExpCat = document.getElementById("filt-exp-cat");
   if (filtExpCat) {
     const catSet = new Set(currentExpenses.map(e => e.category).filter(Boolean));
@@ -262,7 +388,6 @@ function renderDashboard() {
   const totalExpense = currentExpenses.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0);
   const netBalance = totalIncome - totalExpense;
 
-  // Unpaid dues for current month
   const currentYm = new Date().toISOString().slice(0, 7);
   let totalDues = 0;
   let unpaidAptsCount = 0;
@@ -283,7 +408,6 @@ function renderDashboard() {
   document.getElementById("kpi-dues").textContent = formatJOD(totalDues);
   document.getElementById("kpi-dues-sub").textContent = `${unpaidAptsCount} شقق متأخرة عن ${getArabicMonthName(currentYm)}`;
 
-  // Recent Table
   const tbodyRecent = document.getElementById("tbody-recent");
   if (tbodyRecent) {
     const combinedOps = [
@@ -292,11 +416,11 @@ function renderDashboard() {
     ];
     combinedOps.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
-    const top5 = combinedOps.slice(0, 6);
-    if (top5.length === 0) {
-      tbodyRecent.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px; color:#94a3b8;">لا توجد أي حركات مالية مسجلة حتى الآن.</td></tr>';
+    const top6 = combinedOps.slice(0, 6);
+    if (top6.length === 0) {
+      tbodyRecent.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px; color:#94a3b8;">لا توجد أي حركات مالية مسجلة في هذا الصندوق بعد.</td></tr>';
     } else {
-      tbodyRecent.innerHTML = top5.map(op => `
+      tbodyRecent.innerHTML = top6.map(op => `
         <tr>
           <td><span class="badge ${op.type === 'in' ? 'badge-success' : 'badge-danger'}">${op.type === 'in' ? '📥 قبض' : '📤 صرف'}</span></td>
           <td>${op.date ? op.date.slice(0, 10) : '--'}</td>
@@ -311,12 +435,10 @@ function renderDashboard() {
     }
   }
 
-  // Render Charts
   renderDashboardCharts();
 }
 
 function renderDashboardCharts() {
-  // 1. Flow Chart (Monthly In vs Out)
   const ctxFlow = document.getElementById("chart-flow")?.getContext("2d");
   if (ctxFlow) {
     const monthsMap = {};
@@ -362,7 +484,6 @@ function renderDashboardCharts() {
     });
   }
 
-  // 2. Expenses by category Chart
   const ctxExp = document.getElementById("chart-expenses")?.getContext("2d");
   if (ctxExp) {
     const catMap = {};
@@ -402,6 +523,7 @@ function renderApartments() {
   if (!container) return;
 
   const currentYm = new Date().toISOString().slice(0, 7);
+  const managerName = currentBuilding?.manager_name || "المشرف المالي";
 
   container.innerHTML = currentApartments.map(apt => {
     const isPaid = currentPayments.some(p => String(p.apt_no) === String(apt.apt_no) && p.for_month === currentYm);
@@ -424,13 +546,13 @@ function renderApartments() {
               <span>🏠 الصفة: <b>${apt.resident_type}</b></span>
               <span>📍 الموقع: ${apt.floor || '--'}</span>
               <span>💵 الاشتراك: <b>${apt.monthly_fee} د.أ/شهر</b></span>
-              <span>📞 الهاتف: <a href="tel:${apt.phone}" style="color:#2563eb; text-decoration:none;">${apt.phone}</a></span>
+              <span>📞 الهاتف: <a href="tel:${apt.phone}" style="color:#2563eb; text-decoration:none;">${apt.phone || '--'}</a></span>
               <span>💰 إجمالي المسدد تاريخياً: <b>${formatJOD(totalPaidApt)}</b></span>
             </div>
           </div>
         </div>
         <div class="apt-actions">
-          <a href="${generateWhatsAppUrl(apt.phone, `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة العمارة.`)}" target="_blank" class="btn btn-whatsapp" style="flex:1; padding:6px 10px; font-size:0.8rem;">
+          <a href="${generateWhatsAppUrl(apt.phone, `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة العمارة (إشراف ${managerName}).`)}" target="_blank" class="btn btn-whatsapp" style="flex:1; padding:6px 10px; font-size:0.8rem;">
             📱 واتساب
           </a>
           <button class="btn btn-outline" style="flex:1; padding:6px 10px; font-size:0.8rem;" onclick="window.viewResidentReport('${apt.apt_no}')">
@@ -461,7 +583,6 @@ function setupReportsTabs() {
     });
   });
 
-  // Filter Event Listeners
   ["filt-pay-month", "filt-pay-method", "filt-pay-apt", "filt-pay-kw"].forEach(id => {
     document.getElementById(id)?.addEventListener("input", renderReportsPayments);
   });
@@ -472,7 +593,6 @@ function setupReportsTabs() {
   document.getElementById("aging-eval-month")?.addEventListener("input", renderAgingReport);
   document.getElementById("select-wa-month")?.addEventListener("change", renderWhatsAppSummary);
 
-  // Export Buttons
   document.getElementById("btn-export-pays-excel")?.addEventListener("click", () => exportTableToExcel("table-rep-payments", "كشف_المقبوضات"));
   document.getElementById("btn-export-exps-excel")?.addEventListener("click", () => exportTableToExcel("table-rep-expenses", "كشف_المصروفات"));
   document.getElementById("btn-export-tb-excel")?.addEventListener("click", () => exportTableToExcel("tbody-rep-tb", "ميزان_المراجعة", true));
@@ -556,7 +676,6 @@ function renderReportsExpenses() {
 
   const total = filtered.reduce((acc, e) => acc + (parseFloat(e.amount) || 0), 0);
 
-  // Top category
   const catSum = {};
   filtered.forEach(e => { catSum[e.category] = (catSum[e.category] || 0) + (parseFloat(e.amount) || 0); });
   let topCat = "لا يوجد";
@@ -600,12 +719,10 @@ function renderResidentStatement() {
 
   selectedResidentApt = apt;
 
-  // Filter payments for this resident
   const resPays = currentPayments.filter(p => String(p.apt_no) === String(apt.apt_no));
   const totalPaid = resPays.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
   const paidMonths = Array.from(new Set(resPays.map(p => p.for_month).filter(Boolean))).sort();
 
-  // Determine all building months
   const allMonths = new Set();
   allMonths.add(new Date().toISOString().slice(0, 7));
   currentPayments.forEach(p => { if (p.for_month) allMonths.add(p.for_month); });
@@ -627,7 +744,6 @@ function renderResidentStatement() {
     cardDues.className = `kpi-card ${dues > 0 ? 'danger' : 'success'}`;
   }
 
-  // Months breakdown badges
   document.getElementById("res-disp-paid-months").innerHTML = paidMonths.length > 0
     ? paidMonths.map(m => `<span class="badge badge-success" style="margin:2px;">${m}</span>`).join(" ")
     : '<span style="color:#64748b;">لا توجد أشهر مسددة مسجلة بعد.</span>';
@@ -636,7 +752,6 @@ function renderResidentStatement() {
     ? unpaidMonths.map(m => `<span class="badge badge-danger" style="margin:2px;">${m}</span>`).join(" ")
     : '<span style="color:#10b981; font-weight:700;">🎉 كافة الأشهر مسددة بالكامل حتى تاريخه!</span>';
 
-  // Ledger Table
   const tbody = document.getElementById("tbody-res-ledger");
   if (!tbody) return;
 
@@ -666,6 +781,9 @@ function renderResidentStatement() {
 function sendResidentWhatsApp() {
   if (!selectedResidentApt) return;
   const apt = selectedResidentApt;
+  const bName = currentBuilding ? currentBuilding.name : "صندوق العمارة";
+  const managerName = currentBuilding ? currentBuilding.manager_name : "أمين الصندوق";
+
   const resPays = currentPayments.filter(p => String(p.apt_no) === String(apt.apt_no));
   const totalPaid = resPays.reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
   const paidMonths = Array.from(new Set(resPays.map(p => p.for_month).filter(Boolean))).sort();
@@ -677,7 +795,7 @@ function sendResidentWhatsApp() {
   const unpaidMonths = sortedMonths.filter(m => !paidMonths.includes(m));
   const dues = unpaidMonths.length * (parseFloat(apt.monthly_fee) || 25);
 
-  let msg = `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة العمارة (إشراف المهندس أبو عادل). 🌸\n\n`;
+  let msg = `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة ${bName} (إشراف ${managerName}). 🌸\n\n`;
   msg += `📊 *كشف حساب اشتراك خدمات العمارة لشقة رقم (${apt.apt_no}):*\n`;
   msg += `▪️ إجمالي المبالغ المسددة المستلمة: ${totalPaid.toFixed(2)} دينار (${resPays.length} سندات)\n`;
   msg += `▪️ الأشهر المسددة: ${paidMonths.join(" ، ") || "لا يوجد"}\n`;
@@ -765,13 +883,13 @@ function renderTrialBalance() {
 // TAB 5: Render Aging Report (كشف الذمم والمتأخرات)
 function renderAgingReport() {
   const evalMonth = document.getElementById("aging-eval-month")?.value || new Date().toISOString().slice(0, 7);
+  const managerName = currentBuilding?.manager_name || "المشرف المالي";
 
   const monthsSet = new Set();
   monthsSet.add(new Date().toISOString().slice(0, 7));
   currentPayments.forEach(p => { if (p.for_month) monthsSet.add(p.for_month); });
   const allMonths = Array.from(monthsSet).sort();
 
-  // Evaluate for each apartment
   let totalDues = 0;
   let unpaidCount = 0;
 
@@ -780,7 +898,6 @@ function renderAgingReport() {
     const paidMonths = aptPays.map(p => p.for_month);
     const isCurrentMonthPaid = paidMonths.includes(evalMonth);
 
-    // Unpaid up to eval month
     const unpaidList = allMonths.filter(m => m <= evalMonth && !paidMonths.includes(m));
     const dueAmt = unpaidList.length * (parseFloat(apt.monthly_fee) || 25);
 
@@ -789,13 +906,13 @@ function renderAgingReport() {
       unpaidCount++;
     }
 
-    const waMsg = `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة العمارة (إشراف المهندس أبو عادل). 🌸\nنود تذكيركم بلطف بوجود ذمة اشتراك خدمات عمارة مترتبة لشقة رقم (${apt.apt_no}) بقيمة (${dueAmt} دينار) عن الأشهر (${unpaidList.join(" ، ")}).\nشاكرين ومقدرين حسن تعاونكم الدائم.`;
+    const waMsg = `مرحباً جارنا العزيز ${apt.resident_name} المحترم، تحية طيبة من لجنة العمارة (إشراف ${managerName}). 🌸\nنود تذكيركم بلطف بوجود ذمة اشتراك خدمات عمارة مترتبة لشقة رقم (${apt.apt_no}) بقيمة (${dueAmt} دينار) عن الأشهر (${unpaidList.join(" ، ")}).\nشاكرين ومقدرين حسن تعاونكم الدائم.`;
 
     return `
       <tr>
         <td><b>شقة ${apt.apt_no}</b></td>
         <td>${apt.resident_name} (${apt.resident_type})</td>
-        <td><a href="tel:${apt.phone}" style="color:#2563eb; text-decoration:none;">${apt.phone}</a></td>
+        <td><a href="tel:${apt.phone}" style="color:#2563eb; text-decoration:none;">${apt.phone || '--'}</a></td>
         <td>${apt.monthly_fee} د.أ</td>
         <td><span class="badge ${isCurrentMonthPaid ? 'badge-success' : 'badge-danger'}">${isCurrentMonthPaid ? 'مسدد 🟢' : 'غير مسدد 🔴'}</span></td>
         <td>${unpaidList.length > 0 ? `<b style="color:#ef4444;">${unpaidList.length} أشهر</b> (${unpaidList.join("، ")})` : '<span style="color:#10b981;">مسدد بالكامل</span>'}</td>
@@ -823,6 +940,8 @@ function renderAgingReport() {
 // TAB 6: Render WhatsApp Group Summary
 function renderWhatsAppSummary() {
   const ym = document.getElementById("select-wa-month")?.value || new Date().toISOString().slice(0, 7);
+  const bName = currentBuilding ? currentBuilding.name : "صندوق العمارة السكنية";
+  const managerName = currentBuilding ? currentBuilding.manager_name : "أمين الصندوق";
 
   const mIn = currentPayments.filter(p => p.for_month === ym).reduce((acc, p) => acc + (parseFloat(p.amount) || 0), 0);
   const mExps = currentExpenses.filter(e => e.expense_date && e.expense_date.startsWith(ym));
@@ -839,9 +958,9 @@ function renderWhatsAppSummary() {
   }
 
   const reportText = 
-`🏛️ *التقرير المالي الشهري لصندوق العمارة السكنية*
+`🏛️ *التقرير المالي الشهري لـ ${bName}*
 🗓️ *عن شهر:* ${getArabicMonthName(ym)}
-إشراف: المهندس أبو عادل
+إشراف: ${managerName}
 ---------------------------------
 💰 *الملخص المالي:* 
 ▪️ إجمالي التحصيلات والمقبوضات: ${mIn.toFixed(2)} دينار
@@ -852,7 +971,7 @@ function renderWhatsAppSummary() {
 📋 *تفاصيل البنود والمصروفات:* 
 ${expDetails}
 أتقدم بجزيل الشكر لكافة الجيران الأفاضل الملتزمين بالسداد في الموعد المحدد لضمان جودة الخدمات واستمرار الصيانة.
-مع خالص التحية، لجنة العمارة - المهندس أبو عادل 🌸`;
+مع خالص التحية، إدارة الصندوق - ${managerName} 🌸`;
 
   const txtArea = document.getElementById("txt-wa-report-body");
   if (txtArea) txtArea.value = reportText;
@@ -882,7 +1001,6 @@ function exportTableToExcel(tableId, filename, isTbodyOnly = false) {
 // 4. FORMS & MODALS LOGIC
 // =========================================================
 function setupForms() {
-  // 1. Payment Form Submit
   const payForm = document.getElementById("form-payment");
   payForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -899,7 +1017,6 @@ function setupForms() {
       return;
     }
 
-    // Check duplicate
     const exists = currentPayments.some(p => String(p.apt_no) === String(aptNo) && p.for_month === forMonth);
     if (exists) {
       if (!confirm(`⚠️ تم تسجيل دفعة سابقة لشقة (${aptNo}) عن شهر (${forMonth}). هل تود المتابعة وحفظ دفعة إضافية؟`)) {
@@ -922,14 +1039,12 @@ function setupForms() {
       payForm.reset();
       setDefaultDates();
 
-      // Show receipt modal immediately for convenience
       window.previewReceipt(newPay.id);
     } catch (err) {
       showToast("حدث خطأ أثناء الحفظ: " + err.message, "danger");
     }
   });
 
-  // 2. Expense Form Submit
   const expForm = document.getElementById("form-expense");
   expForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -959,7 +1074,6 @@ function setupForms() {
     }
   });
 
-  // 3. Apartment Form Submit
   const aptForm = document.getElementById("form-apartment");
   aptForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -987,7 +1101,6 @@ function setupForms() {
     }
   });
 
-  // 4. Reset Database Execution
   document.getElementById("btn-execute-reset")?.addEventListener("click", async () => {
     const chk = document.getElementById("chk-confirm-reset");
     if (!chk || !chk.checked) {
@@ -999,7 +1112,7 @@ function setupForms() {
 
     try {
       await store.clearAllData(clearApts);
-      showToast("تم تصفير وتفريغ قاعدة البيانات بنجاح.");
+      showToast("تم تصفير وتفريغ قاعدة بيانات الصندوق الحالي بنجاح.");
       closeModal("modal-reset");
     } catch (err) {
       showToast("حدث خطأ أثناء التصفير: " + err.message, "danger");
@@ -1012,6 +1125,8 @@ function setupModals() {
     document.getElementById("form-apartment").reset();
     document.getElementById("modal-apt-title").textContent = "إضافة شقة جديدة";
     document.getElementById("modal-apt-no").removeAttribute("readonly");
+    const defFee = currentBuilding?.default_monthly_fee || 25;
+    document.getElementById("modal-apt-fee").value = defFee;
     openModal("modal-apartment");
   });
 
@@ -1030,10 +1145,13 @@ function closeModal(id) {
   if (el) el.classList.remove("active");
 }
 
-// Global modal helpers attached to window
+// Global modal helpers
 window.previewReceipt = function(id) {
   const pay = currentPayments.find(p => p.id === id);
   if (!pay) return;
+
+  const bName = currentBuilding ? currentBuilding.name : "صندوق العمارة السكنية";
+  const managerName = currentBuilding ? currentBuilding.manager_name : "أمين الصندوق";
 
   document.getElementById("rcpt-badge-no").textContent = `سند قبض رقم: ${pay.receipt_no || '--'}`;
   document.getElementById("rcpt-date").textContent = pay.payment_date || pay.created_at?.slice(0, 10) || '--';
@@ -1045,12 +1163,11 @@ window.previewReceipt = function(id) {
   document.getElementById("rcpt-amount").textContent = formatJOD(pay.amount);
   document.getElementById("rcpt-amount-words").textContent = numberToArabicWords(pay.amount);
 
-  // WhatsApp Button
   const apt = currentApartments.find(a => String(a.apt_no) === String(pay.apt_no));
   const phone = apt ? apt.phone : '';
   const btnWa = document.getElementById("btn-modal-rcpt-wa");
   if (btnWa) {
-    const waText = `مرحباً جارنا العزيز ${pay.resident_name} المحترم، تحية طيبة من لجنة العمارة (المهندس أبو عادل). 🌸\nنود إعلامكم باستلام مبلغ (${pay.amount} دينار) بدل اشتراك خدمات وصيانة عن شهر (${pay.for_month}) بموجب سند قبض رقم (${pay.receipt_no}). شاكرين ومقدرين تعاونكم الدائم.`;
+    const waText = `مرحباً جارنا العزيز ${pay.resident_name} المحترم، تحية طيبة من لجنة ${bName} (إشراف ${managerName}). 🌸\nنود إعلامكم باستلام مبلغ (${pay.amount} دينار) بدل اشتراك خدمات وصيانة عن شهر (${pay.for_month}) بموجب سند قبض رقم (${pay.receipt_no}). شاكرين ومقدرين تعاونكم الدائم.`;
     btnWa.onclick = () => window.open(generateWhatsAppUrl(phone, waText), '_blank');
   }
 

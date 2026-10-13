@@ -1,22 +1,21 @@
 // =========================================================
-// Database Engine (Cloud Firestore + Local Cache Fallback)
-// Sandoq Building Fund | المهندس أبو عادل
+// Multi-Tenant Database Engine (Cloud Firestore Multi-Building Support)
+// Sandoq Building Fund Platform | نظام صناديق العمارات السكنية
 // =========================================================
 
 import { 
   db, 
   collection, 
   doc, 
+  getDoc, 
   getDocs, 
   setDoc, 
   addDoc, 
   deleteDoc, 
-  onSnapshot, 
-  query, 
-  writeBatch 
+  onSnapshot 
 } from "./firebase-config.js";
 
-export const DEFAULT_APARTMENTS = [
+export const DEFAULT_APARTMENTS_ABUADEL = [
   {"apt_no": "1", "resident_name": "أحمد خليل الرواشدة", "phone": "0795551101", "resident_type": "مالك", "monthly_fee": 25.0, "floor": "طابق تسوية"},
   {"apt_no": "2", "resident_name": "محمود إبراهيم الكردي", "phone": "0795551102", "resident_type": "مستأجر", "monthly_fee": 25.0, "floor": "طابق تسوية"},
   {"apt_no": "3", "resident_name": "المهندس أبو عادل", "phone": "0795551103", "resident_type": "مالك", "monthly_fee": 25.0, "floor": "طابق أرضي"},
@@ -29,13 +28,27 @@ export const DEFAULT_APARTMENTS = [
   {"apt_no": "10", "resident_name": "سامر ناصر المجالي", "phone": "0795551110", "resident_type": "مستأجر", "monthly_fee": 25.0, "floor": "طابق ثالث (روف)"}
 ];
 
-class BuildingFundStore {
+export const DEFAULT_BUILDING_ABUADEL = {
+  id: "abuadel",
+  name: "صندوق عمارة المهندس أبو عادل",
+  username: "abuadel",
+  password: "abuadel2026",
+  manager_name: "المهندس أبو عادل",
+  phone: "0795551103",
+  default_monthly_fee: 25.0,
+  address: "عمان - الأردن"
+};
+
+class MultiTenantStore {
   constructor() {
+    this.currentBuilding = null;
     this.apartments = [];
     this.payments = [];
     this.expenses = [];
     this.listeners = [];
-    this.isSyncing = false;
+    this.unsubApts = null;
+    this.unsubPays = null;
+    this.unsubExps = null;
   }
 
   subscribe(listener) {
@@ -47,99 +60,262 @@ class BuildingFundStore {
 
   notify() {
     this.listeners.forEach(cb => cb({
+      building: this.currentBuilding,
       apartments: this.apartments,
       payments: this.payments,
       expenses: this.expenses
     }));
   }
 
-  async initRealtime() {
-    // 1. Initial Local Cache
+  // Load active session from localStorage
+  getActiveSession() {
     try {
-      const cachedApts = localStorage.getItem("sandoq_apartments");
-      const cachedPays = localStorage.getItem("sandoq_payments");
-      const cachedExps = localStorage.getItem("sandoq_expenses");
-      
-      this.apartments = cachedApts ? JSON.parse(cachedApts) : [...DEFAULT_APARTMENTS];
-      this.payments = cachedPays ? JSON.parse(cachedPays) : [];
-      this.expenses = cachedExps ? JSON.parse(cachedExps) : [];
-      this.notify();
+      const saved = localStorage.getItem("sandoq_active_building");
+      return saved ? JSON.parse(saved) : null;
     } catch (e) {
-      this.apartments = [...DEFAULT_APARTMENTS];
+      return null;
+    }
+  }
+
+  // Set active session
+  setActiveSession(buildingData) {
+    this.currentBuilding = buildingData;
+    localStorage.setItem("sandoq_active_building", JSON.stringify(buildingData));
+  }
+
+  // Logout
+  logout() {
+    if (this.unsubApts) this.unsubApts();
+    if (this.unsubPays) this.unsubPays();
+    if (this.unsubExps) this.unsubExps();
+    this.currentBuilding = null;
+    this.apartments = [];
+    this.payments = [];
+    this.expenses = [];
+    localStorage.removeItem("sandoq_active_building");
+    this.notify();
+  }
+
+  // Login checking
+  async login(username, password) {
+    const cleanUser = String(username || "").trim().toLowerCase();
+    const cleanPass = String(password || "").trim();
+
+    // 1. Check default building Abu Adel
+    if (cleanUser === "abuadel" && cleanPass === "abuadel2026") {
+      this.setActiveSession(DEFAULT_BUILDING_ABUADEL);
+      await this.initRealtime(DEFAULT_BUILDING_ABUADEL.id);
+      return { success: true, building: DEFAULT_BUILDING_ABUADEL };
     }
 
+    // 2. Check Firestore buildings
+    if (db) {
+      try {
+        const bDoc = await getDoc(doc(db, "buildings", cleanUser));
+        if (bDoc.exists()) {
+          const bData = bDoc.data();
+          if (bData.password === cleanPass) {
+            this.setActiveSession(bData);
+            await this.initRealtime(bData.id);
+            return { success: true, building: bData };
+          } else {
+            return { success: false, error: "كلمة المرور غير صحيحة" };
+          }
+        }
+      } catch (err) {
+        console.error("Login fetch error:", err);
+      }
+    }
+
+    // 3. Check local storage custom buildings
+    try {
+      const localBuildings = JSON.parse(localStorage.getItem("sandoq_all_buildings") || "{}");
+      if (localBuildings[cleanUser]) {
+        const bData = localBuildings[cleanUser];
+        if (bData.password === cleanPass) {
+          this.setActiveSession(bData);
+          await this.initRealtime(bData.id);
+          return { success: true, building: bData };
+        }
+      }
+    } catch (e) {}
+
+    return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
+  }
+
+  // Register New Building
+  async registerBuilding({ name, username, password, manager_name, phone, default_monthly_fee, apt_count }) {
+    const cleanUser = String(username || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+    if (!cleanUser) throw new Error("يرجى إدخال اسم مستخدم صالح باللغة الإنجليزية أو الأرقام");
+    if (!password) throw new Error("يرجى إدخال كلمة مرور");
+
+    const buildingData = {
+      id: cleanUser,
+      name: name || `صندوق عمارة ${cleanUser}`,
+      username: cleanUser,
+      password: password,
+      manager_name: manager_name || "مشرف الصندوق",
+      phone: phone || "",
+      default_monthly_fee: parseFloat(default_monthly_fee) || 25.0,
+      created_at: new Date().toISOString()
+    };
+
+    // Save Building
+    if (db) {
+      await setDoc(doc(db, "buildings", cleanUser), buildingData);
+    }
+
+    // Save in local cache
+    try {
+      const allB = JSON.parse(localStorage.getItem("sandoq_all_buildings") || "{}");
+      allB[cleanUser] = buildingData;
+      localStorage.setItem("sandoq_all_buildings", JSON.stringify(allB));
+    } catch (e) {}
+
+    // Generate starter apartments for this new building
+    const count = parseInt(apt_count, 10) || 8;
+    const starterApts = [];
+    for (let i = 1; i <= count; i++) {
+      const floorNames = ["طابق أرضي", "طابق أول", "طابق ثاني", "طابق ثالث", "طابق رابع"];
+      const floor = floorNames[Math.floor((i - 1) / 4)] || "طابق سكني";
+      starterApts.push({
+        apt_no: String(i),
+        resident_name: `ساكن شقة ${i}`,
+        phone: "",
+        resident_type: (i % 2 === 0) ? "مستأجر" : "مالك",
+        monthly_fee: buildingData.default_monthly_fee,
+        floor: floor
+      });
+    }
+
+    // Seed starter apartments into Firestore
+    if (db) {
+      for (const apt of starterApts) {
+        await setDoc(doc(db, "buildings", cleanUser, "apartments", String(apt.apt_no)), apt);
+      }
+    } else {
+      localStorage.setItem(`sandoq_${cleanUser}_apartments`, JSON.stringify(starterApts));
+    }
+
+    this.setActiveSession(buildingData);
+    await this.initRealtime(cleanUser);
+    return buildingData;
+  }
+
+  // Initialize Realtime Sync for specific building
+  async initRealtime(buildingId) {
+    if (!buildingId) return;
+
+    // Unsubscribe previous listeners
+    if (this.unsubApts) this.unsubApts();
+    if (this.unsubPays) this.unsubPays();
+    if (this.unsubExps) this.unsubExps();
+
+    // 1. Initial Local Cache for this building
+    try {
+      const cApts = localStorage.getItem(`sandoq_${buildingId}_apartments`);
+      const cPays = localStorage.getItem(`sandoq_${buildingId}_payments`);
+      const cExps = localStorage.getItem(`sandoq_${buildingId}_expenses`);
+
+      if (cApts) this.apartments = JSON.parse(cApts);
+      else if (buildingId === "abuadel") this.apartments = [...DEFAULT_APARTMENTS_ABUADEL];
+      else this.apartments = [];
+
+      this.payments = cPays ? JSON.parse(cPays) : [];
+      this.expenses = cExps ? JSON.parse(cExps) : [];
+      this.notify();
+    } catch (e) {}
+
     if (!db) {
-      console.warn("Firestore not available, using local store.");
+      console.warn("Firestore not connected, using local store for building:", buildingId);
       return;
     }
 
-    // 2. Listen to Apartments
+    // Ensure building doc exists for abuadel
+    if (buildingId === "abuadel") {
+      try {
+        await setDoc(doc(db, "buildings", "abuadel"), DEFAULT_BUILDING_ABUADEL, { merge: true });
+      } catch (e) {}
+    }
+
+    // 2. Listen to this building's Apartments
     try {
-      onSnapshot(collection(db, "apartments"), async (snapshot) => {
-        if (snapshot.empty) {
-          // If Firestore is empty, seed with defaults
-          console.log("Firestore apartments empty, seeding defaults...");
-          for (const apt of DEFAULT_APARTMENTS) {
-            await setDoc(doc(db, "apartments", String(apt.apt_no)), apt);
+      const aptsCol = collection(db, "buildings", buildingId, "apartments");
+      this.unsubApts = onSnapshot(aptsCol, async (snapshot) => {
+        if (snapshot.empty && buildingId === "abuadel") {
+          console.log("Seeding Abu Adel apartments into subcollection...");
+          for (const apt of DEFAULT_APARTMENTS_ABUADEL) {
+            await setDoc(doc(db, "buildings", "abuadel", "apartments", String(apt.apt_no)), apt);
           }
         } else {
           this.apartments = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
           this.apartments.sort((a, b) => parseInt(a.apt_no || 0) - parseInt(b.apt_no || 0));
-          localStorage.setItem("sandoq_apartments", JSON.stringify(this.apartments));
+          localStorage.setItem(`sandoq_${buildingId}_apartments`, JSON.stringify(this.apartments));
           this.notify();
         }
-      }, (err) => console.error("Apartments listen error:", err));
+      }, err => console.error("Apts listen error:", err));
 
-      // 3. Listen to Payments
-      onSnapshot(collection(db, "payments"), (snapshot) => {
+      // 3. Listen to this building's Payments
+      const paysCol = collection(db, "buildings", buildingId, "payments");
+      this.unsubPays = onSnapshot(paysCol, (snapshot) => {
         this.payments = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         this.payments.sort((a, b) => new Date(b.created_at || b.payment_date || 0) - new Date(a.created_at || a.payment_date || 0));
-        localStorage.setItem("sandoq_payments", JSON.stringify(this.payments));
+        localStorage.setItem(`sandoq_${buildingId}_payments`, JSON.stringify(this.payments));
         this.notify();
-      }, (err) => console.error("Payments listen error:", err));
+      }, err => console.error("Pays listen error:", err));
 
-      // 4. Listen to Expenses
-      onSnapshot(collection(db, "expenses"), (snapshot) => {
+      // 4. Listen to this building's Expenses
+      const expsCol = collection(db, "buildings", buildingId, "expenses");
+      this.unsubExps = onSnapshot(expsCol, (snapshot) => {
         this.expenses = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
         this.expenses.sort((a, b) => new Date(b.created_at || b.expense_date || 0) - new Date(a.created_at || a.expense_date || 0));
-        localStorage.setItem("sandoq_expenses", JSON.stringify(this.expenses));
+        localStorage.setItem(`sandoq_${buildingId}_expenses`, JSON.stringify(this.expenses));
         this.notify();
-      }, (err) => console.error("Expenses listen error:", err));
+      }, err => console.error("Exps listen error:", err));
+
     } catch (err) {
-      console.error("Firestore setup error:", err);
+      console.error("Firestore setup error for building:", buildingId, err);
     }
   }
 
-  // Save / Update Apartment
+  // Apartment CRUD
   async saveApartment(aptData) {
+    if (!this.currentBuilding) throw new Error("يرجى تسجيل الدخول أولاً");
+    const bId = this.currentBuilding.id;
     const key = String(aptData.apt_no);
+
     if (db) {
-      await setDoc(doc(db, "apartments", key), aptData, { merge: true });
+      await setDoc(doc(db, "buildings", bId, "apartments", key), aptData, { merge: true });
     } else {
       const idx = this.apartments.findIndex(a => String(a.apt_no) === key);
       if (idx >= 0) this.apartments[idx] = aptData;
       else this.apartments.push(aptData);
-      localStorage.setItem("sandoq_apartments", JSON.stringify(this.apartments));
+      localStorage.setItem(`sandoq_${bId}_apartments`, JSON.stringify(this.apartments));
       this.notify();
     }
     return true;
   }
 
-  // Delete Apartment
   async deleteApartment(aptNo) {
+    if (!this.currentBuilding) return;
+    const bId = this.currentBuilding.id;
     const key = String(aptNo);
+
     if (db) {
-      await deleteDoc(doc(db, "apartments", key));
+      await deleteDoc(doc(db, "buildings", bId, "apartments", key));
     } else {
       this.apartments = this.apartments.filter(a => String(a.apt_no) !== key);
-      localStorage.setItem("sandoq_apartments", JSON.stringify(this.apartments));
+      localStorage.setItem(`sandoq_${bId}_apartments`, JSON.stringify(this.apartments));
       this.notify();
     }
     return true;
   }
 
-  // Add Payment
+  // Payment CRUD
   async addPayment(paymentData) {
+    if (!this.currentBuilding) throw new Error("يرجى تسجيل الدخول أولاً");
+    const bId = this.currentBuilding.id;
+
     paymentData.created_at = new Date().toISOString();
     if (!paymentData.receipt_no) {
       const year = new Date().getFullYear();
@@ -149,31 +325,36 @@ class BuildingFundStore {
     paymentData.amount = parseFloat(paymentData.amount) || 0;
 
     if (db) {
-      const res = await addDoc(collection(db, "payments"), paymentData);
+      const res = await addDoc(collection(db, "buildings", bId, "payments"), paymentData);
       paymentData.id = res.id;
     } else {
       paymentData.id = "pay_" + Date.now();
       this.payments.unshift(paymentData);
-      localStorage.setItem("sandoq_payments", JSON.stringify(this.payments));
+      localStorage.setItem(`sandoq_${bId}_payments`, JSON.stringify(this.payments));
       this.notify();
     }
     return paymentData;
   }
 
-  // Delete Payment
   async deletePayment(id) {
+    if (!this.currentBuilding) return;
+    const bId = this.currentBuilding.id;
+
     if (db) {
-      await deleteDoc(doc(db, "payments", id));
+      await deleteDoc(doc(db, "buildings", bId, "payments", id));
     } else {
       this.payments = this.payments.filter(p => p.id !== id);
-      localStorage.setItem("sandoq_payments", JSON.stringify(this.payments));
+      localStorage.setItem(`sandoq_${bId}_payments`, JSON.stringify(this.payments));
       this.notify();
     }
     return true;
   }
 
-  // Add Expense
+  // Expense CRUD
   async addExpense(expenseData) {
+    if (!this.currentBuilding) throw new Error("يرجى تسجيل الدخول أولاً");
+    const bId = this.currentBuilding.id;
+
     expenseData.created_at = new Date().toISOString();
     if (!expenseData.expense_no) {
       const year = new Date().getFullYear();
@@ -183,56 +364,61 @@ class BuildingFundStore {
     expenseData.amount = parseFloat(expenseData.amount) || 0;
 
     if (db) {
-      const res = await addDoc(collection(db, "expenses"), expenseData);
+      const res = await addDoc(collection(db, "buildings", bId, "expenses"), expenseData);
       expenseData.id = res.id;
     } else {
       expenseData.id = "exp_" + Date.now();
       this.expenses.unshift(expenseData);
-      localStorage.setItem("sandoq_expenses", JSON.stringify(this.expenses));
+      localStorage.setItem(`sandoq_${bId}_expenses`, JSON.stringify(this.expenses));
       this.notify();
     }
     return expenseData;
   }
 
-  // Delete Expense
   async deleteExpense(id) {
+    if (!this.currentBuilding) return;
+    const bId = this.currentBuilding.id;
+
     if (db) {
-      await deleteDoc(doc(db, "expenses", id));
+      await deleteDoc(doc(db, "buildings", bId, "expenses", id));
     } else {
       this.expenses = this.expenses.filter(e => e.id !== id);
-      localStorage.setItem("sandoq_expenses", JSON.stringify(this.expenses));
+      localStorage.setItem(`sandoq_${bId}_expenses`, JSON.stringify(this.expenses));
       this.notify();
     }
     return true;
   }
 
-  // Clear / Reset Database
+  // Clear / Reset Database for current building only
   async clearAllData(clearApartments = false) {
+    if (!this.currentBuilding) return;
+    const bId = this.currentBuilding.id;
+
     if (db) {
-      const pSnap = await getDocs(collection(db, "payments"));
+      const pSnap = await getDocs(collection(db, "buildings", bId, "payments"));
       for (const d of pSnap.docs) {
-        await deleteDoc(doc(db, "payments", d.id));
+        await deleteDoc(doc(db, "buildings", bId, "payments", d.id));
       }
-      const eSnap = await getDocs(collection(db, "expenses"));
+      const eSnap = await getDocs(collection(db, "buildings", bId, "expenses"));
       for (const d of eSnap.docs) {
-        await deleteDoc(doc(db, "expenses", d.id));
+        await deleteDoc(doc(db, "buildings", bId, "expenses", d.id));
       }
       if (clearApartments) {
-        const aSnap = await getDocs(collection(db, "apartments"));
+        const aSnap = await getDocs(collection(db, "buildings", bId, "apartments"));
         for (const d of aSnap.docs) {
-          await deleteDoc(doc(db, "apartments", d.id));
+          await deleteDoc(doc(db, "buildings", bId, "apartments", d.id));
         }
       }
     }
     this.payments = [];
     this.expenses = [];
     if (clearApartments) this.apartments = [];
-    localStorage.removeItem("sandoq_payments");
-    localStorage.removeItem("sandoq_expenses");
-    if (clearApartments) localStorage.removeItem("sandoq_apartments");
+    localStorage.removeItem(`sandoq_${bId}_payments`);
+    localStorage.removeItem(`sandoq_${bId}_expenses`);
+    if (clearApartments) localStorage.removeItem(`sandoq_${bId}_apartments`);
     this.notify();
     return true;
   }
 }
 
-export const store = new BuildingFundStore();
+export const store = new MultiTenantStore();
